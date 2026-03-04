@@ -1,0 +1,281 @@
+"""Settings page -- provider configuration, waterfall order, and cache management."""
+from __future__ import annotations
+
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+
+import streamlit as st
+
+from config.settings import ProviderName
+from providers.apollo import ApolloProvider
+from providers.findymail import FindymailProvider
+from providers.icypeas import IcypeasProvider
+from providers.contactout import ContactOutProvider
+
+from ui.app import get_database, get_settings
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+_EXECUTOR = ThreadPoolExecutor(max_workers=4)
+
+_PROVIDER_CLASSES = {
+    ProviderName.APOLLO: ApolloProvider,
+    ProviderName.FINDYMAIL: FindymailProvider,
+    ProviderName.ICYPEAS: IcypeasProvider,
+    ProviderName.CONTACTOUT: ContactOutProvider,
+}
+
+
+def _run_async(coro):
+    """Run an async coroutine from synchronous Streamlit code."""
+    return asyncio.run(coro)
+
+
+def _mask_key(key: str) -> str:
+    """Mask an API key for display, showing only last 4 characters."""
+    if not key:
+        return ""
+    if len(key) <= 4:
+        return "*" * len(key)
+    return "*" * (len(key) - 4) + key[-4:]
+
+
+# ---------------------------------------------------------------------------
+# Page
+# ---------------------------------------------------------------------------
+
+st.header("Settings")
+
+db = get_database()
+settings = get_settings()
+
+# ---- Provider Configuration Cards -------------------------------------------
+
+st.subheader("Provider Configuration")
+
+for pname in ProviderName:
+    pcfg = settings.providers.get(pname)
+    if pcfg is None:
+        continue
+
+    with st.container(border=True):
+        header_cols = st.columns([3, 1])
+        with header_cols[0]:
+            st.markdown(f"### {pname.value.title()}")
+        with header_cols[1]:
+            enabled = st.toggle(
+                "Enabled",
+                value=pcfg.enabled,
+                key=f"enabled_{pname.value}",
+            )
+            pcfg.enabled = enabled
+
+        config_cols = st.columns(3)
+
+        # API Key input (masked)
+        with config_cols[0]:
+            st.markdown("**API Key**")
+            current_display = _mask_key(pcfg.api_key)
+            new_key = st.text_input(
+                "API Key",
+                value="",
+                type="password",
+                placeholder=current_display or "Enter API key...",
+                key=f"apikey_{pname.value}",
+                label_visibility="collapsed",
+            )
+            if new_key:
+                pcfg.api_key = new_key
+                st.caption(":green[Key updated (in memory only)]")
+            elif pcfg.api_key:
+                st.caption(f"Current: {current_display}")
+
+            # Test Connection button
+            if st.button(
+                "Test Connection",
+                key=f"test_{pname.value}",
+                disabled=not pcfg.api_key,
+                use_container_width=True,
+            ):
+                provider_cls = _PROVIDER_CLASSES.get(pname)
+                if provider_cls:
+                    with st.spinner(f"Testing {pname.value}..."):
+                        try:
+                            provider = provider_cls(api_key=pcfg.api_key)
+                            healthy = _run_async(provider.health_check())
+                            if healthy:
+                                st.success(f"{pname.value.title()}: Connection OK")
+                            else:
+                                st.error(f"{pname.value.title()}: Connection failed")
+                        except Exception as exc:
+                            st.error(f"{pname.value.title()}: {exc}")
+
+        # Budget inputs
+        with config_cols[1]:
+            st.markdown("**Daily Budget**")
+            daily_limit = st.number_input(
+                "Daily credit limit",
+                min_value=0,
+                max_value=1_000_000,
+                value=pcfg.daily_credit_limit or 0,
+                step=100,
+                key=f"daily_{pname.value}",
+                label_visibility="collapsed",
+            )
+            pcfg.daily_credit_limit = daily_limit if daily_limit > 0 else None
+
+        with config_cols[2]:
+            st.markdown("**Monthly Budget**")
+            monthly_limit = st.number_input(
+                "Monthly credit limit",
+                min_value=0,
+                max_value=10_000_000,
+                value=pcfg.monthly_credit_limit or 0,
+                step=1000,
+                key=f"monthly_{pname.value}",
+                label_visibility="collapsed",
+            )
+            pcfg.monthly_credit_limit = monthly_limit if monthly_limit > 0 else None
+
+st.divider()
+
+# ---- Waterfall Order Configuration ------------------------------------------
+
+st.subheader("Waterfall Order")
+st.caption(
+    "Configure the order in which providers are tried during enrichment. "
+    "Providers higher in the list are tried first."
+)
+
+current_order = list(settings.waterfall_order)
+
+# Display current order with move up/down buttons
+for idx, pname in enumerate(current_order):
+    order_cols = st.columns([1, 4, 1, 1])
+    with order_cols[0]:
+        st.markdown(f"**{idx + 1}.**")
+    with order_cols[1]:
+        pcfg = settings.providers.get(pname)
+        status = ":green[Enabled]" if (pcfg and pcfg.enabled and pcfg.api_key) else ":red[Disabled]"
+        st.markdown(f"**{pname.value.title()}** {status}")
+    with order_cols[2]:
+        if st.button(
+            "Up",
+            key=f"up_{pname.value}",
+            disabled=idx == 0,
+            use_container_width=True,
+        ):
+            current_order[idx], current_order[idx - 1] = (
+                current_order[idx - 1],
+                current_order[idx],
+            )
+            settings.waterfall_order = current_order
+            st.rerun()
+    with order_cols[3]:
+        if st.button(
+            "Down",
+            key=f"down_{pname.value}",
+            disabled=idx == len(current_order) - 1,
+            use_container_width=True,
+        ):
+            current_order[idx], current_order[idx + 1] = (
+                current_order[idx + 1],
+                current_order[idx],
+            )
+            settings.waterfall_order = current_order
+            st.rerun()
+
+st.divider()
+
+# ---- Cache Management -------------------------------------------------------
+
+st.subheader("Cache Management")
+
+cache_cols = st.columns(3)
+
+with cache_cols[0]:
+    st.markdown("**Cache Statistics**")
+    with db._connect() as conn:
+        total_cached = conn.execute("SELECT COUNT(*) FROM cache").fetchone()[0]
+        expired = conn.execute(
+            "SELECT COUNT(*) FROM cache WHERE expires_at < CURRENT_TIMESTAMP"
+        ).fetchone()[0]
+        active = total_cached - expired
+        total_hits = conn.execute(
+            "SELECT COALESCE(SUM(hit_count), 0) FROM cache"
+        ).fetchone()[0]
+
+    st.metric("Active Entries", f"{active:,}")
+    st.metric("Expired Entries", f"{expired:,}")
+    st.metric("Total Cache Hits", f"{total_hits:,}")
+
+with cache_cols[1]:
+    st.markdown("**Cache by Provider**")
+    with db._connect() as conn:
+        rows = conn.execute(
+            "SELECT provider, COUNT(*) as cnt, SUM(hit_count) as hits "
+            "FROM cache WHERE expires_at > CURRENT_TIMESTAMP "
+            "GROUP BY provider"
+        ).fetchall()
+    for row in rows:
+        st.markdown(f"- **{row['provider'].title()}**: {row['cnt']:,} entries, {row['hits']:,} hits")
+    if not rows:
+        st.caption("No active cache entries.")
+
+with cache_cols[2]:
+    st.markdown("**Actions**")
+    if st.button(
+        "Purge Expired Entries",
+        icon=":material/delete_sweep:",
+        use_container_width=True,
+    ):
+        purged = db.cache_purge_expired()
+        st.success(f"Purged {purged:,} expired entries.")
+        st.rerun()
+
+    if st.button(
+        "Clear ALL Cache",
+        icon=":material/delete_forever:",
+        type="secondary",
+        use_container_width=True,
+    ):
+        with db._connect() as conn:
+            conn.execute("DELETE FROM cache")
+        st.success("All cache entries cleared.")
+        st.rerun()
+
+st.divider()
+
+# ---- General Settings -------------------------------------------------------
+
+st.subheader("General Settings")
+
+general_cols = st.columns(2)
+
+with general_cols[0]:
+    cache_ttl = st.number_input(
+        "Cache TTL (days)",
+        min_value=1,
+        max_value=365,
+        value=settings.cache_ttl_days,
+        step=1,
+    )
+    settings.cache_ttl_days = cache_ttl
+
+with general_cols[1]:
+    max_concurrent = st.number_input(
+        "Max Concurrent Requests",
+        min_value=1,
+        max_value=50,
+        value=settings.max_concurrent_requests,
+        step=1,
+    )
+    settings.max_concurrent_requests = max_concurrent
+
+st.divider()
+st.caption(
+    "Settings are stored in memory for this session. "
+    "To persist changes, update your `.env` file and restart the application."
+)
