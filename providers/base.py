@@ -1,6 +1,7 @@
 """Abstract base class for all enrichment providers."""
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional, Any
@@ -9,6 +10,8 @@ import httpx
 
 from config.settings import ProviderName
 from data.models import Company, Person
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -99,7 +102,20 @@ class BaseProvider(ABC):
         try:
             await self.check_credits()
             return True
-        except Exception:
+        except httpx.HTTPStatusError as exc:
+            logger.warning(
+                "%s health check failed: HTTP %d",
+                self.name.value, exc.response.status_code,
+            )
+            return False
+        except httpx.TimeoutException:
+            logger.warning("%s health check failed: timeout", self.name.value)
+            return False
+        except OSError as exc:
+            logger.warning(
+                "%s health check failed: connection error: %s",
+                self.name.value, exc,
+            )
             return False
 
     async def close(self):

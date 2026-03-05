@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -10,6 +11,8 @@ import httpx
 from config.settings import ProviderName
 from data.models import Company, Person
 from providers.base import BaseProvider, ProviderResponse
+
+logger = logging.getLogger(__name__)
 
 
 class ContactOutProvider(BaseProvider):
@@ -387,8 +390,6 @@ class ContactOutProvider(BaseProvider):
     async def health_check(self) -> bool:
         """Verify the token is valid by making a lightweight API call."""
         try:
-            # Use the domain enrich endpoint with a known domain as a
-            # lightweight connectivity test.
             await self._get(
                 "/v1/domain/enrich", params={"domain": "contactout.com"},
             )
@@ -397,6 +398,16 @@ class ContactOutProvider(BaseProvider):
             # A 404 is fine (just means no data), but 401 means bad token.
             if exc.response.status_code == 404:
                 return True
+            logger.warning(
+                "ContactOut health check failed: HTTP %d",
+                exc.response.status_code,
+            )
             return False
-        except Exception:
+        except httpx.TimeoutException:
+            logger.warning("ContactOut health check failed: timeout")
+            return False
+        except OSError as exc:
+            logger.warning(
+                "ContactOut health check failed: connection error: %s", exc,
+            )
             return False

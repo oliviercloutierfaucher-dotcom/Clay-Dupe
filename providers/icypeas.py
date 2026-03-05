@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Optional
 
 import httpx
@@ -9,6 +10,8 @@ import httpx
 from providers.base import BaseProvider, ProviderResponse
 from config.settings import ProviderName
 from data.models import Company, Person
+
+logger = logging.getLogger(__name__)
 
 
 class IcypeasProvider(BaseProvider):
@@ -307,7 +310,16 @@ class IcypeasProvider(BaseProvider):
         try:
             resp = await self.find_email("test", "user", "example.com")
             return resp.error is None
-        except Exception:
+        except httpx.HTTPStatusError as exc:
+            logger.warning(
+                "Icypeas health check failed: HTTP %d", exc.response.status_code,
+            )
+            return False
+        except httpx.TimeoutException:
+            logger.warning("Icypeas health check failed: timeout")
+            return False
+        except OSError as exc:
+            logger.warning("Icypeas health check failed: connection error: %s", exc)
             return False
 
     # ------------------------------------------------------------------

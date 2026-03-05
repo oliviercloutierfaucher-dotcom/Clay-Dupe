@@ -1,6 +1,7 @@
 """Apollo.io provider implementation."""
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -9,6 +10,8 @@ import httpx
 from config.settings import ProviderName
 from data.models import Company, Person
 from providers.base import BaseProvider, ProviderResponse
+
+logger = logging.getLogger(__name__)
 
 
 class ApolloProvider(BaseProvider):
@@ -383,5 +386,14 @@ class ApolloProvider(BaseProvider):
         try:
             await self._get("/rate_limits")
             return True
-        except Exception:
+        except httpx.HTTPStatusError as exc:
+            logger.warning(
+                "Apollo health check failed: HTTP %d", exc.response.status_code,
+            )
+            return False
+        except httpx.TimeoutException:
+            logger.warning("Apollo health check failed: timeout")
+            return False
+        except OSError as exc:
+            logger.warning("Apollo health check failed: connection error: %s", exc)
             return False

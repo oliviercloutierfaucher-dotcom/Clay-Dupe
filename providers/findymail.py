@@ -1,6 +1,7 @@
 """Findymail provider — email finder & verifier."""
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 import httpx
@@ -8,6 +9,8 @@ import httpx
 from providers.base import BaseProvider, ProviderResponse
 from config.settings import ProviderName
 from data.models import Company, Person
+
+logger = logging.getLogger(__name__)
 
 
 class FindymailProvider(BaseProvider):
@@ -123,14 +126,9 @@ class FindymailProvider(BaseProvider):
     async def check_credits(self) -> Optional[dict]:
         """GET /api/credits — return remaining credit balance."""
         url = f"{self.base_url}/credits"
-
-        try:
-            data, _ = await self._request(
-                "GET", url, headers=self._headers(),
-            )
-        except httpx.HTTPStatusError as exc:
-            raise exc
-
+        data, _ = await self._request(
+            "GET", url, headers=self._headers(),
+        )
         return data
 
     # ------------------------------------------------------------------
@@ -141,7 +139,16 @@ class FindymailProvider(BaseProvider):
         try:
             await self.check_credits()
             return True
-        except Exception:
+        except httpx.HTTPStatusError as exc:
+            logger.warning(
+                "Findymail health check failed: HTTP %d", exc.response.status_code,
+            )
+            return False
+        except httpx.TimeoutException:
+            logger.warning("Findymail health check failed: timeout")
+            return False
+        except OSError as exc:
+            logger.warning("Findymail health check failed: connection error: %s", exc)
             return False
 
     # ------------------------------------------------------------------
