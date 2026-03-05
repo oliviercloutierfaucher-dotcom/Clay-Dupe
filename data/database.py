@@ -683,6 +683,59 @@ class Database:
                 ),
             )
 
+    async def save_enrichment_atomic(
+        self,
+        result: EnrichmentResult,
+        provider: str,
+        credits: float,
+        found: bool,
+    ) -> None:
+        """Save enrichment result and record credit usage in one transaction.
+
+        Uses BEGIN IMMEDIATE to prevent concurrent budget races.
+        """
+        today = date.today().isoformat()
+        prov = provider if isinstance(provider, str) else provider.value
+        usage_id = str(uuid.uuid4())
+        now = datetime.utcnow().isoformat()
+
+        async with self._connect() as conn:
+            await conn.execute("BEGIN IMMEDIATE")
+
+            # 1. Record credit usage
+            await conn.execute(
+                """INSERT INTO credit_usage
+                   (id, provider, credits_used, found, lookup_date, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(provider, lookup_date) DO UPDATE SET
+                       credits_used = credits_used + excluded.credits_used,
+                       lookups = lookups + 1,
+                       found_count = found_count + CASE WHEN excluded.found THEN 1 ELSE 0 END""",
+                (usage_id, prov, credits, int(found), today, now),
+            )
+
+            # 2. Save enrichment result
+            await conn.execute(
+                """INSERT INTO enrichment_results
+                   (id, person_id, company_id, campaign_id, enrichment_type,
+                    query_input, source_provider, result_data, found,
+                    confidence_score, verification_status, cost_credits,
+                    cost_usd, response_time_ms, found_at, waterfall_position,
+                    from_cache)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    result.id, result.person_id, result.company_id,
+                    result.campaign_id, result.enrichment_type.value,
+                    json.dumps(result.query_input), result.source_provider.value,
+                    json.dumps(result.result_data), int(result.found),
+                    result.confidence_score, result.verification_status.value,
+                    result.cost_credits, result.cost_usd, result.response_time_ms,
+                    result.found_at.isoformat() if result.found_at else None,
+                    result.waterfall_position, int(result.from_cache),
+                ),
+            )
+            # conn auto-commits on context manager exit
+
     async def get_enrichment_results(self, **filters) -> list[EnrichmentResult]:
         """Search enrichment results with dynamic filters.
 

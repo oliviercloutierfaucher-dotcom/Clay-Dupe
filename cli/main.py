@@ -639,7 +639,7 @@ def verify(
         console=console, transient=True,
     ) as progress:
         progress.add_task("Running verification pipeline...")
-        result = verifier.verify(email)
+        result = run_sync(verifier.verify(email))
 
     # Build result table
     table = Table(box=box.ROUNDED, show_header=False, title="Verification Result")

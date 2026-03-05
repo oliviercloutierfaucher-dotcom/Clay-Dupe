@@ -277,7 +277,12 @@ class WaterfallOrchestrator:
                 )
 
                 try:
-                    await self.db.save_enrichment_result(result)
+                    await self.db.save_enrichment_atomic(
+                        result=result,
+                        provider=effective_provider.value,
+                        credits=total_credits,
+                        found=True,
+                    )
                 except Exception:
                     logger.exception("Failed to save enrichment result")
 
@@ -306,7 +311,15 @@ class WaterfallOrchestrator:
         )
 
         try:
-            await self.db.save_enrichment_result(not_found)
+            if total_credits > 0:
+                await self.db.save_enrichment_atomic(
+                    result=not_found,
+                    provider=(provider_name or ProviderName.APOLLO).value,
+                    credits=total_credits,
+                    found=False,
+                )
+            else:
+                await self.db.save_enrichment_result(not_found)
         except Exception:
             logger.exception("Failed to save not-found result")
 
@@ -556,13 +569,8 @@ class WaterfallOrchestrator:
                 else:
                     cb.record_success()
 
-            if not is_free and response.credits_used > 0:
-                await self.budget.record_spend(
-                    provider=provider_name,
-                    credits=response.credits_used,
-                    campaign_id=campaign_id,
-                    found=response.found,
-                )
+            # NOTE: credit recording is deferred to save_enrichment_atomic()
+            # so budget deduction and result save are atomic.
 
         return response
 

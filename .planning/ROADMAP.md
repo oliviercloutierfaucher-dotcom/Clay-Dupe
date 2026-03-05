@@ -13,8 +13,8 @@ This milestone hardens and scales a functioning self-hosted B2B waterfall enrich
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Infrastructure Foundation** - Pin Python >= 3.11, migrate to aiosqlite, and integrate aiometer — prerequisites for all async refactoring
-- [ ] **Phase 2: Exception & Response Hardening** - Replace bare exception handlers with typed boundaries and add .get() fallbacks on all API response parsing
-- [ ] **Phase 3: Data Layer Hardening** - Eliminate SQL injection via parameterized queries and add input validation before all provider API calls
+- [x] **Phase 2: Exception & Response Hardening** - Replace bare exception handlers with typed boundaries and add .get() fallbacks on all API response parsing
+- [x] **Phase 3: Data Layer Hardening** - Eliminate SQL injection via parameterized queries and add input validation before all provider API calls
 - [ ] **Phase 4: Operational Hardening** - Add API key rotation, SMTP rate limiting, and atomic budget/state transactions
 - [ ] **Phase 5: I/O & Concurrency Performance** - Implement chunked batch processing, shared HTTP connection pool, and adaptive per-provider concurrency
 - [ ] **Phase 6: Cache & Database Performance** - Add cache table indexes, automatic cache eviction, and WAL checkpoint management
@@ -52,8 +52,8 @@ Plans:
 **Plans**: TBD
 
 Plans:
-- [ ] 02-01: Audit and replace bare exception handlers across all 4 providers with typed boundaries
-- [ ] 02-02: Replace all direct dictionary key access on API responses with .get() fallbacks across all providers
+- [x] 02-01: Audit and replace bare exception handlers across all 4 providers with typed boundaries
+- [x] 02-02: Replace all direct dictionary key access on API responses with .get() fallbacks across all providers
 
 ### Phase 3: Data Layer Hardening
 **Goal**: The database layer has no SQL injection surface and all provider inputs are validated before credits are consumed on invalid data
@@ -67,8 +67,8 @@ Plans:
 **Plans**: TBD
 
 Plans:
-- [ ] 03-01: Parameterize all SQL queries in database.py — eliminate string formatting in SQL statements
-- [ ] 03-02: Add Pydantic v2 field validators for domain, email, name, and LinkedIn URL on provider method inputs
+- [x] 03-01: Parameterize all SQL queries in database.py — eliminate string formatting in SQL statements
+- [x] 03-02: Add Pydantic v2 field validators for domain, email, name, and LinkedIn URL on provider method inputs
 
 ### Phase 4: Operational Hardening
 **Goal**: API keys can be rotated live, SMTP verification does not trigger spam detection, and budget checks with credit deductions are atomic — no race conditions, no orphaned state on crash
@@ -178,8 +178,8 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Infrastructure Foundation | 3/3 | Complete | 2026-03-04 |
-| 2. Exception & Response Hardening | 0/2 | Not started | - |
-| 3. Data Layer Hardening | 0/2 | Not started | - |
+| 2. Exception & Response Hardening | 2/2 | Complete | 2026-03-04 |
+| 3. Data Layer Hardening | 2/2 | Complete | 2026-03-04 |
 | 4. Operational Hardening | 0/3 | Not started | - |
 | 5. I/O & Concurrency Performance | 0/3 | Not started | - |
 | 6. Cache & Database Performance | 0/3 | Not started | - |

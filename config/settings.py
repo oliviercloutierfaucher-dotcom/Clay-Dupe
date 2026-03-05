@@ -39,6 +39,28 @@ class Settings(BaseModel):
     max_concurrent_requests: int = 5
     icp_presets: dict[str, ICPPreset]
 
+    def reload_api_keys(self) -> dict[ProviderName, bool]:
+        """Re-read API keys from .env without restarting.
+
+        Returns a dict mapping each provider to whether its key changed.
+        """
+        load_dotenv(override=True)
+        changed: dict[ProviderName, bool] = {}
+        for pname in ProviderName:
+            env_key = f"{pname.value.upper()}_API_KEY"
+            new_key = os.getenv(env_key, "")
+            pcfg = self.providers.get(pname)
+            if pcfg is not None:
+                old_key = pcfg.api_key
+                if new_key != old_key:
+                    pcfg.api_key = new_key
+                    changed[pname] = True
+                else:
+                    changed[pname] = False
+            else:
+                changed[pname] = False
+        return changed
+
 def load_settings() -> Settings:
     """Load settings from environment variables."""
     # Build provider configs from env vars

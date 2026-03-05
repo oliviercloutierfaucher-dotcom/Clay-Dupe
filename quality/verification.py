@@ -71,7 +71,7 @@ class EmailVerifier:
                 dns.resolver.NoNameservers, dns.exception.Timeout):
             return []
 
-    def detect_catch_all(self, domain: str) -> Optional[bool]:
+    async def detect_catch_all(self, domain: str) -> Optional[bool]:
         """Stage 3: Probe with random fake address to detect catch-all.
         True = catch-all, False = not catch-all, None = inconclusive."""
         if domain in self._catch_all_cache:
@@ -87,6 +87,7 @@ class EmailVerifier:
         fake_email = f"{fake_local}@{domain}"
 
         try:
+            await self._rate_limiter.wait_for_slot(domain)
             result = self._smtp_probe(fake_email, mx_hosts[0])
             is_catch_all = result == "accepted"
             self._catch_all_cache[domain] = is_catch_all
@@ -95,7 +96,7 @@ class EmailVerifier:
             self._catch_all_cache[domain] = None
             return None
 
-    def verify_smtp(self, email: str) -> str:
+    async def verify_smtp(self, email: str) -> str:
         """Stage 4: SMTP RCPT TO probe. Returns 'valid'/'invalid'/'catch_all'/'unknown'."""
         domain = email.split('@')[1]
         mx_hosts = self.check_mx(domain)
@@ -103,10 +104,11 @@ class EmailVerifier:
             return "unknown"
 
         # Check catch-all first
-        catch_all = self.detect_catch_all(domain)
+        catch_all = await self.detect_catch_all(domain)
         if catch_all:
             return "catch_all"
 
+        await self._rate_limiter.wait_for_slot(domain)
         result = self._smtp_probe(email, mx_hosts[0])
         if result == "accepted":
             return "valid"
@@ -131,7 +133,7 @@ class EmailVerifier:
         except (smtplib.SMTPException, OSError, TimeoutError):
             return "error"
 
-    def verify(self, email: str) -> dict:
+    async def verify(self, email: str) -> dict:
         """Full 4-stage pipeline. Short-circuits on definitive result."""
         result = {
             "email": email,
@@ -159,7 +161,7 @@ class EmailVerifier:
         result["mx_found"] = True
 
         # Stage 3: Catch-all detection
-        catch_all = self.detect_catch_all(domain)
+        catch_all = await self.detect_catch_all(domain)
         if catch_all:
             result["catch_all"] = True
             result["smtp_result"] = "catch_all"
@@ -167,7 +169,8 @@ class EmailVerifier:
             result["confidence_modifier"] = -15
             return result
 
-        # Stage 4: SMTP verification
+        # Stage 4: SMTP verification (rate-limited)
+        await self._rate_limiter.wait_for_slot(domain)
         smtp_result = self._smtp_probe(email, mx_hosts[0])
         if smtp_result == "accepted":
             result["valid"] = True

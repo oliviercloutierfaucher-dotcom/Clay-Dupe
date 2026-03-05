@@ -468,7 +468,7 @@ class PatternEngine:
         is_catch_all = await self.db.get_catch_all_status(domain)
         if is_catch_all is None:
             # Fall back to verifier detection
-            is_catch_all = self.verifier.detect_catch_all(domain)
+            is_catch_all = await self.verifier.detect_catch_all(domain)
             if is_catch_all is not None:
                 await self.db.set_catch_all_status(domain, is_catch_all)
 
@@ -476,7 +476,7 @@ class PatternEngine:
         if not is_catch_all:
             # Not a catch-all domain -- SMTP verify top candidates
             for candidate in candidates:
-                verification = self.verifier.verify(candidate["email"])
+                verification = await self.verifier.verify(candidate["email"])
                 if verification.get("valid"):
                     return candidate["email"]
             # None of the candidates verified
