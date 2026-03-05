@@ -6,6 +6,7 @@ import streamlit as st
 from config.settings import ProviderName
 from cost.budget import BudgetManager
 from data.models import CampaignStatus
+from data.sync import run_sync
 
 
 # ---------------------------------------------------------------------------
@@ -41,7 +42,7 @@ settings = get_settings()
 
 # ---- Top-level metric cards ------------------------------------------------
 
-stats = db.get_dashboard_stats()
+stats = run_sync(db.get_dashboard_stats())
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Total Enriched", f"{stats['total_enriched']:,}")
@@ -67,7 +68,7 @@ for pname, pcfg in settings.providers.items():
 provider_cols = st.columns(len(ProviderName))
 for idx, pname in enumerate(ProviderName):
     with provider_cols[idx]:
-        balance = budget_mgr.get_balance(pname)
+        balance = run_sync(budget_mgr.get_balance(pname))
         st.markdown(f"**{pname.value.title()}**")
 
         # Daily usage bar
@@ -97,7 +98,7 @@ st.divider()
 
 st.subheader("Recent Campaigns")
 
-campaigns = db.get_recent_campaigns(limit=10)
+campaigns = run_sync(db.get_recent_campaigns(limit=10))
 
 if not campaigns:
     st.info("No campaigns yet. Head to the **Enrich** page to create one.")

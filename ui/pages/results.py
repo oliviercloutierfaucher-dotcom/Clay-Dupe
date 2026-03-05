@@ -11,6 +11,7 @@ import streamlit as st
 from config.settings import ProviderName
 from data.models import EnrichmentResult, VerificationStatus
 
+from data.sync import run_sync
 from ui.app import get_database, get_settings
 
 # ---------------------------------------------------------------------------
@@ -27,7 +28,7 @@ with st.sidebar:
     st.subheader("Filters")
 
     # Campaign filter
-    campaigns = db.get_recent_campaigns(limit=50)
+    campaigns = run_sync(db.get_recent_campaigns(limit=50))
     campaign_options = {"All": None}
     for c in campaigns:
         label = f"{c.name} ({c.created_at:%Y-%m-%d})"
@@ -71,7 +72,7 @@ if selected_provider != "All":
 
 # ---- Fetch results -----------------------------------------------------------
 
-results: list[EnrichmentResult] = db.get_enrichment_results(**query_filters)
+results: list[EnrichmentResult] = run_sync(db.get_enrichment_results(**query_filters))
 
 # Apply confidence filter client-side
 if confidence_threshold > 0:

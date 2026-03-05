@@ -38,6 +38,7 @@ from quality.circuit_breaker import create_rate_limiters, create_circuit_breaker
 from cost.budget import BudgetManager
 from cost.tracker import CostTracker
 from cost.cache import CacheManager
+from data.sync import run_sync
 from providers.apollo import ApolloProvider
 from providers.findymail import FindymailProvider
 from providers.icypeas import IcypeasProvider
@@ -194,13 +195,13 @@ def enrich(
     cache_mgr = CacheManager(db)
 
     records = apply_mapping(df, mapper.mapping)
-    cache_stats = cache_mgr.get_stats()
+    cache_stats = run_sync(cache_mgr.get_stats())
 
-    estimate = cost_tracker.estimate_campaign_cost(
+    estimate = run_sync(cost_tracker.estimate_campaign_cost(
         total_rows=len(records),
         cached_rows=cache_stats.get("active_entries", 0),
         waterfall_order=settings.waterfall_order,
-    )
+    ))
 
     est_table = Table(title="Cost Estimate", box=box.SIMPLE)
     est_table.add_column("Provider", style="cyan")
@@ -251,9 +252,9 @@ def enrich(
         status=CampaignStatus.CREATED,
         total_rows=len(records),
     )
-    campaign = db.create_campaign(campaign)
-    db.create_campaign_rows(campaign.id, records)
-    db.update_campaign_status(campaign.id, CampaignStatus.RUNNING)
+    campaign = run_sync(db.create_campaign(campaign))
+    run_sync(db.create_campaign_rows(campaign.id, records))
+    run_sync(db.update_campaign_status(campaign.id, CampaignStatus.RUNNING))
 
     # --- Run enrichment ---
     async def _run_enrichment() -> tuple[list[Person], dict, dict]:
@@ -286,7 +287,7 @@ def enrich(
         ) as progress:
             task = progress.add_task("Enriching...", total=total)
 
-            pending_rows = db.get_pending_rows(campaign.id, limit=total)
+            pending_rows = await db.get_pending_rows(campaign.id, limit=total)
 
             for row_data in pending_rows:
                 row_input = row_data.get("input_data", row_data)
@@ -310,7 +311,7 @@ def enrich(
 
                 if not first_name or not (domain or company_name):
                     failed_count += 1
-                    db.update_campaign_row(
+                    await db.update_campaign_row(
                         row_data["id"], "skipped", error="Insufficient data",
                     )
                     progress.advance(task)
@@ -329,7 +330,7 @@ def enrich(
 
                 # Try cache
                 if not email_found and domain:
-                    cached = cache_mgr.get(
+                    cached = await cache_mgr.get(
                         "any", "email_lookup",
                         {"first_name": first_name, "last_name": last_name, "domain": domain},
                     )
@@ -343,7 +344,7 @@ def enrich(
                         provider = providers.get(pname)
                         if provider is None:
                             continue
-                        if not budget_mgr.can_spend(pname, 1.0, campaign.id):
+                        if not await budget_mgr.can_spend(pname, 1.0, campaign.id):
                             continue
 
                         try:
@@ -356,7 +357,7 @@ def enrich(
                             )
                             continue
 
-                        budget_mgr.record_spend(
+                        await budget_mgr.record_spend(
                             pname, resp.credits_used,
                             campaign_id=campaign.id, found=resp.found,
                         )
@@ -365,7 +366,7 @@ def enrich(
                             email_found = resp.email
 
                             # Cache the result
-                            cache_mgr.set(
+                            await cache_mgr.set(
                                 pname.value, "email_lookup",
                                 {"first_name": first_name, "last_name": last_name, "domain": domain},
                                 {"email": resp.email, "provider": pname.value},
@@ -374,13 +375,13 @@ def enrich(
 
                             # Learn pattern
                             if domain:
-                                pattern_engine.learn_pattern(
+                                await pattern_engine.learn_pattern(
                                     resp.email, first_name, last_name, domain,
                                 )
                             break
                         else:
                             # Negative cache
-                            cache_mgr.set(
+                            await cache_mgr.set(
                                 pname.value, "email_lookup",
                                 {"first_name": first_name, "last_name": last_name, "domain": domain},
                                 {"email": None, "provider": pname.value},
@@ -400,16 +401,16 @@ def enrich(
                     state=row_input.get("state"),
                     country=row_input.get("country"),
                 )
-                person = db.upsert_person(person)
+                person = await db.upsert_person(person)
                 enriched_people.append(person)
 
                 if email_found:
                     found_count += 1
-                    db.update_campaign_row(
+                    await db.update_campaign_row(
                         row_data["id"], "completed", person_id=person.id,
                     )
                 else:
-                    db.update_campaign_row(
+                    await db.update_campaign_row(
                         row_data["id"], "completed", person_id=person.id,
                         error="No email found",
                     )
@@ -426,7 +427,7 @@ def enrich(
 
                 progress.advance(task)
 
-        db.update_campaign_status(
+        await db.update_campaign_status(
             campaign.id,
             CampaignStatus.COMPLETED,
             enriched_rows=len(enriched_people),
@@ -440,12 +441,12 @@ def enrich(
         people, companies, meta = asyncio.run(_run_enrichment())
     except KeyboardInterrupt:
         console.print("\n[yellow]Interrupted -- saving partial results.[/]")
-        db.update_campaign_status(campaign.id, CampaignStatus.CANCELLED)
+        run_sync(db.update_campaign_status(campaign.id, CampaignStatus.CANCELLED))
         asyncio.run(_close_providers(providers))
         raise typer.Exit(code=130)
     except Exception as exc:
         console.print(f"\n[bold red]Enrichment failed:[/] {exc}")
-        db.update_campaign_status(campaign.id, CampaignStatus.FAILED)
+        run_sync(db.update_campaign_status(campaign.id, CampaignStatus.FAILED))
         asyncio.run(_close_providers(providers))
         raise typer.Exit(code=1)
     finally:
@@ -672,7 +673,7 @@ def stats(
     budget_mgr = BudgetManager(db)
 
     # --- Dashboard stats ---
-    dash = db.get_dashboard_stats()
+    dash = run_sync(db.get_dashboard_stats())
     dash_panel = Panel(
         f"People Enriched: [bold]{dash['total_enriched']:,}[/]\n"
         f"Email Find Rate: [bold]{dash['email_find_rate']}%[/]\n"
@@ -684,7 +685,7 @@ def stats(
     console.print(dash_panel)
 
     # --- Provider stats ---
-    provider_stats = cost_tracker.get_all_provider_stats(days=days)
+    provider_stats = run_sync(cost_tracker.get_all_provider_stats(days=days))
 
     if provider_stats:
         prov_table = Table(
@@ -714,7 +715,7 @@ def stats(
         console.print(prov_table)
 
         # Waterfall recommendation
-        recommendation = cost_tracker.get_waterfall_recommendation()
+        recommendation = run_sync(cost_tracker.get_waterfall_recommendation())
         if recommendation:
             rec_order = " -> ".join(p.value for p in recommendation)
             console.print(
@@ -738,7 +739,7 @@ def stats(
     budget_table.add_column("Status")
 
     for pname in ProviderName:
-        balance = budget_mgr.get_balance(pname)
+        balance = run_sync(budget_mgr.get_balance(pname))
         status_parts = []
         if balance["at_daily_cap"]:
             status_parts.append("[red]Daily cap[/]")
@@ -758,7 +759,7 @@ def stats(
     console.print(budget_table)
 
     # --- Cache stats ---
-    cs = cache_mgr.get_stats()
+    cs = run_sync(cache_mgr.get_stats())
     cache_table = Table(title="Cache Statistics", box=box.ROUNDED)
     cache_table.add_column("Metric", style="bold cyan")
     cache_table.add_column("Value", justify="right")

@@ -8,6 +8,7 @@ import streamlit as st
 
 from config.settings import ProviderName
 from cost.tracker import CostTracker
+from data.sync import run_sync
 
 from ui.app import get_database, get_settings
 
@@ -41,8 +42,8 @@ st.divider()
 
 # ---- Fetch data --------------------------------------------------------------
 
-provider_stats = tracker.get_all_provider_stats(days=days_back)
-daily_history = tracker.get_daily_spend_history(days=days_back)
+provider_stats = run_sync(tracker.get_all_provider_stats(days=days_back))
+daily_history = run_sync(tracker.get_daily_spend_history(days=days_back))
 
 # ===== Section 1: Cost Per Provider Bar Chart =================================
 
@@ -172,32 +173,35 @@ st.divider()
 
 st.subheader("Pattern Engine Savings")
 
-with db._connect() as conn:
-    # Count pattern-matched results (from_cache flag or waterfall_position=0 might
-    # indicate pattern engine use; here we count cache hits as proxy)
-    cache_hits = conn.execute(
-        "SELECT COUNT(*) FROM enrichment_results WHERE from_cache = 1"
-    ).fetchone()[0]
+async def _fetch_pattern_stats():
+    async with db._connect() as conn:
+        cur = await conn.execute(
+            "SELECT COUNT(*) FROM enrichment_results WHERE from_cache = 1"
+        )
+        cache_hits = (await cur.fetchone())[0]
 
-    total_results = conn.execute(
-        "SELECT COUNT(*) FROM enrichment_results"
-    ).fetchone()[0]
+        cur = await conn.execute("SELECT COUNT(*) FROM enrichment_results")
+        total_results = (await cur.fetchone())[0]
 
-    # Credits saved = cache_hits * avg credit cost per lookup
-    avg_credit_row = conn.execute(
-        "SELECT AVG(cost_credits) FROM enrichment_results WHERE cost_credits > 0"
-    ).fetchone()
-    avg_credit = avg_credit_row[0] if avg_credit_row and avg_credit_row[0] else 1.0
+        cur = await conn.execute(
+            "SELECT AVG(cost_credits) FROM enrichment_results WHERE cost_credits > 0"
+        )
+        avg_credit_row = await cur.fetchone()
+        avg_credit = avg_credit_row[0] if avg_credit_row and avg_credit_row[0] else 1.0
 
-    # Pattern stats
-    pattern_count = conn.execute("SELECT COUNT(*) FROM email_patterns").fetchone()[0]
-    domain_count = conn.execute(
-        "SELECT COUNT(DISTINCT domain) FROM email_patterns"
-    ).fetchone()[0]
-    avg_confidence = conn.execute(
-        "SELECT AVG(confidence) FROM email_patterns"
-    ).fetchone()
-    avg_pattern_confidence = avg_confidence[0] if avg_confidence and avg_confidence[0] else 0.0
+        cur = await conn.execute("SELECT COUNT(*) FROM email_patterns")
+        pattern_count = (await cur.fetchone())[0]
+        cur = await conn.execute("SELECT COUNT(DISTINCT domain) FROM email_patterns")
+        domain_count = (await cur.fetchone())[0]
+        cur = await conn.execute("SELECT AVG(confidence) FROM email_patterns")
+        avg_confidence = await cur.fetchone()
+        avg_pattern_confidence = avg_confidence[0] if avg_confidence and avg_confidence[0] else 0.0
+
+    return cache_hits, total_results, avg_credit, pattern_count, domain_count, avg_pattern_confidence
+
+cache_hits, total_results, avg_credit, pattern_count, domain_count, avg_pattern_confidence = run_sync(
+    _fetch_pattern_stats()
+)
 
 estimated_credits_saved = cache_hits * avg_credit
 
@@ -223,15 +227,19 @@ with pattern_detail_cols[2]:
 # Show top patterns if available
 if pattern_count > 0:
     st.markdown("**Top Email Patterns by Domain Coverage**")
-    with db._connect() as conn:
-        top_patterns = conn.execute(
-            "SELECT pattern, COUNT(*) as domain_count, AVG(confidence) as avg_conf, "
-            "SUM(sample_count) as total_samples "
-            "FROM email_patterns "
-            "GROUP BY pattern "
-            "ORDER BY domain_count DESC "
-            "LIMIT 10"
-        ).fetchall()
+    async def _fetch_top_patterns():
+        async with db._connect() as conn:
+            cur = await conn.execute(
+                "SELECT pattern, COUNT(*) as domain_count, AVG(confidence) as avg_conf, "
+                "SUM(sample_count) as total_samples "
+                "FROM email_patterns "
+                "GROUP BY pattern "
+                "ORDER BY domain_count DESC "
+                "LIMIT 10"
+            )
+            return await cur.fetchall()
+
+    top_patterns = run_sync(_fetch_top_patterns())
 
     pattern_rows = []
     for row in top_patterns:
@@ -254,7 +262,7 @@ st.divider()
 
 st.subheader("Waterfall Optimization")
 
-recommendation = tracker.get_waterfall_recommendation()
+recommendation = run_sync(tracker.get_waterfall_recommendation())
 if recommendation:
     st.warning("A more cost-effective waterfall order has been detected (>15% savings).")
     rec_cols = st.columns(2)

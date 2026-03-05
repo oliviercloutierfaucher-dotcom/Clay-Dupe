@@ -23,20 +23,21 @@ class CostTracker:
     def __init__(self, db: Database):
         self.db = db
 
-    def get_provider_stats(self, provider: ProviderName, days: int = 30) -> dict:
+    async def get_provider_stats(self, provider: ProviderName, days: int = 30) -> dict:
         """Returns hit_rate, avg_cost_per_hit, total_credits, total_lookups, marginal_finds."""
         cutoff = (date.today() - timedelta(days=days)).isoformat()
 
-        with self.db._connect() as conn:
+        async with self.db._connect() as conn:
             # Basic stats: total lookups, found count, total credits
-            row = conn.execute("""
+            cursor = await conn.execute("""
                 SELECT COUNT(*) as total_lookups,
                        SUM(CASE WHEN found = 1 THEN 1 ELSE 0 END) as found_count,
                        SUM(cost_credits) as total_credits,
                        AVG(response_time_ms) as avg_response_ms
                 FROM enrichment_results
                 WHERE source_provider = ? AND found_at >= ?
-            """, (provider.value, cutoff)).fetchone()
+            """, (provider.value, cutoff))
+            row = await cursor.fetchone()
 
             total_lookups = row["total_lookups"] or 0
             found_count = row["found_count"] or 0
@@ -46,7 +47,7 @@ class CostTracker:
             # Marginal finds: results found by this provider where no earlier
             # waterfall step (lower waterfall_position) found a result for the
             # same person_id in the same campaign.
-            marginal_row = conn.execute("""
+            cursor = await conn.execute("""
                 SELECT COUNT(*) as marginal
                 FROM enrichment_results er
                 WHERE er.source_provider = ?
@@ -59,7 +60,8 @@ class CostTracker:
                         AND earlier.found = 1
                         AND earlier.waterfall_position < er.waterfall_position
                   )
-            """, (provider.value, cutoff)).fetchone()
+            """, (provider.value, cutoff))
+            marginal_row = await cursor.fetchone()
 
             marginal_finds = marginal_row["marginal"] or 0
 
@@ -81,17 +83,17 @@ class CostTracker:
             "avg_response_ms": round(avg_response_ms, 1) if avg_response_ms else None,
         }
 
-    def get_all_provider_stats(self, days: int = 30) -> dict[str, dict]:
+    async def get_all_provider_stats(self, days: int = 30) -> dict[str, dict]:
         """Get stats for all providers."""
         result = {}
         for provider in ProviderName:
-            stats = self.get_provider_stats(provider, days=days)
+            stats = await self.get_provider_stats(provider, days=days)
             # Only include providers that have activity
             if stats["total_lookups"] > 0:
                 result[provider.value] = stats
         return result
 
-    def get_waterfall_recommendation(self) -> Optional[list[ProviderName]]:
+    async def get_waterfall_recommendation(self) -> Optional[list[ProviderName]]:
         """If reordering providers by (hit_rate/cost) would save >15%, return recommended order.
 
         The efficiency score is hit_rate / avg_cost_per_hit. Providers with
@@ -100,7 +102,7 @@ class CostTracker:
         the estimated total cost of the current order against the optimal order;
         if savings exceed 15%, we return the new order.
         """
-        stats = self.get_all_provider_stats(days=30)
+        stats = await self.get_all_provider_stats(days=30)
         if len(stats) < 2:
             return None
 
@@ -113,14 +115,15 @@ class CostTracker:
             provider_efficiency.append((provider, efficiency, pstats))
 
         # Current order: as they appear in DB (by average waterfall_position)
-        with self.db._connect() as conn:
-            order_rows = conn.execute("""
+        async with self.db._connect() as conn:
+            cursor = await conn.execute("""
                 SELECT source_provider, AVG(waterfall_position) as avg_pos
                 FROM enrichment_results
                 WHERE waterfall_position IS NOT NULL
                 GROUP BY source_provider
                 ORDER BY avg_pos ASC
-            """).fetchall()
+            """)
+            order_rows = await cursor.fetchall()
 
         if not order_rows:
             return None
@@ -144,12 +147,9 @@ class CostTracker:
                 pstats = stats[p.value]
                 hit_rate_frac = pstats["hit_rate"] / 100.0
                 avg_cost = pstats["avg_cost_per_hit"] if pstats["avg_cost_per_hit"] > 0 else 0.001
-                # Cost for this step: remaining rows * avg_cost (every lookup costs)
-                # but we approximate cost as: remaining * (total_credits / total_lookups)
                 cost_per_lookup = (pstats["total_credits"] / pstats["total_lookups"]
                                    if pstats["total_lookups"] > 0 else 0)
                 total_cost += remaining_fraction * cost_per_lookup
-                # After this step, the found fraction is removed
                 remaining_fraction *= (1 - hit_rate_frac)
             return total_cost
 
@@ -165,11 +165,11 @@ class CostTracker:
             return optimal_order
         return None
 
-    def estimate_campaign_cost(self, total_rows: int, cached_rows: int,
-                               waterfall_order: list[ProviderName]) -> dict:
+    async def estimate_campaign_cost(self, total_rows: int, cached_rows: int,
+                                     waterfall_order: list[ProviderName]) -> dict:
         """Estimate credits/cost for a new campaign based on historical hit rates.
         Returns per-provider estimates and total."""
-        stats = self.get_all_provider_stats(days=30)
+        stats = await self.get_all_provider_stats(days=30)
         rows_to_enrich = total_rows - cached_rows
         remaining = float(rows_to_enrich)
         per_provider = {}
@@ -202,7 +202,6 @@ class CostTracker:
 
             total_credits += estimated_credits
             total_cost_usd += estimated_usd
-            # Remaining rows shrink by the expected finds
             remaining -= estimated_finds
             if remaining <= 0:
                 remaining = 0
@@ -217,24 +216,24 @@ class CostTracker:
             "estimated_unfound_rows": round(remaining),
         }
 
-    def get_daily_spend_history(self, days: int = 30) -> list[dict]:
+    async def get_daily_spend_history(self, days: int = 30) -> list[dict]:
         """Returns daily spend data for charts. List of {date, provider, credits, cost}."""
         cutoff = (date.today() - timedelta(days=days)).isoformat()
 
-        with self.db._connect() as conn:
-            rows = conn.execute("""
+        async with self.db._connect() as conn:
+            cursor = await conn.execute("""
                 SELECT date, provider, credits_used,
                        api_calls_made, successful_lookups, failed_lookups
                 FROM credit_usage
                 WHERE date >= ?
                 ORDER BY date ASC, provider ASC
-            """, (cutoff,)).fetchall()
+            """, (cutoff,))
+            rows = await cursor.fetchall()
 
         result = []
         for row in rows:
             provider_name = row["provider"]
             credits = row["credits_used"] or 0.0
-            # Look up cost per credit for this provider
             try:
                 prov = ProviderName(provider_name)
                 cost_per_credit = _PROVIDER_COST_PER_CREDIT.get(prov, 0.01)

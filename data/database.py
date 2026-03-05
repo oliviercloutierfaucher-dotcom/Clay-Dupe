@@ -3,17 +3,25 @@
 Uses WAL mode for concurrent reads and provides all CRUD operations
 for companies, people, campaigns, enrichment results, credits, cache,
 email patterns, catch-all status, audit logging, and dashboard stats.
+
+All public methods are async and use aiosqlite for non-blocking I/O.
+For synchronous callers (Streamlit, tests), use ``run_sync(db.method(...))``
+from :mod:`data.sync`.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import sqlite3
+import sys
 import uuid
-from contextlib import contextmanager
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, date
 from pathlib import Path
 from typing import Optional
+
+import aiosqlite
 
 from config.settings import ProviderName
 from data.models import (
@@ -21,44 +29,54 @@ from data.models import (
     CacheEntry, EmailPattern, EnrichmentType, VerificationStatus, CampaignStatus,
 )
 
+if sys.version_info < (3, 11):
+    raise RuntimeError(
+        f"Clay-Dupe requires Python >= 3.11, got {sys.version_info.major}.{sys.version_info.minor}"
+    )
+
 
 class Database:
     def __init__(self, db_path: str = "clay_dupe.db"):
         self.db_path = db_path
         self._init_db()
 
-    @contextmanager
-    def _connect(self):
-        """Context manager for DB connections. WAL mode, FK ON, busy_timeout=5000."""
+    def _init_db(self):
+        """Execute schema.sql to create tables (sync — runs once at startup)."""
+        schema_path = Path(__file__).parent / "schema.sql"
         conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA foreign_keys=ON")
-        conn.execute("PRAGMA busy_timeout=5000")
         try:
-            yield conn
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA foreign_keys=ON")
+            conn.executescript(schema_path.read_text())
             conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
         finally:
             conn.close()
 
-    def _init_db(self):
-        """Execute schema.sql to create tables."""
-        schema_path = Path(__file__).parent / "schema.sql"
-        with self._connect() as conn:
-            conn.executescript(schema_path.read_text())
+    @asynccontextmanager
+    async def _connect(self):
+        """Async context manager for DB connections. WAL mode, FK ON, busy_timeout=5000."""
+        conn = await aiosqlite.connect(self.db_path)
+        conn.row_factory = aiosqlite.Row
+        await conn.execute("PRAGMA journal_mode=WAL")
+        await conn.execute("PRAGMA foreign_keys=ON")
+        await conn.execute("PRAGMA busy_timeout=5000")
+        try:
+            yield conn
+            await conn.commit()
+        except Exception:
+            await conn.rollback()
+            raise
+        finally:
+            await conn.close()
 
     # ------------------------------------------------------------------
     # Helpers: Row -> Model conversion
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _row_to_company(row: sqlite3.Row) -> Company:
-        """Convert an sqlite3.Row to a Company model."""
+    def _row_to_company(row) -> Company:
+        """Convert a Row to a Company model."""
         d = dict(row)
-        # Deserialize JSON fields
         if isinstance(d.get("industry_tags"), str):
             try:
                 d["industry_tags"] = json.loads(d["industry_tags"])
@@ -67,14 +85,14 @@ class Database:
         return Company.model_validate(d)
 
     @staticmethod
-    def _row_to_person(row: sqlite3.Row) -> Person:
-        """Convert an sqlite3.Row to a Person model."""
+    def _row_to_person(row) -> Person:
+        """Convert a Row to a Person model."""
         d = dict(row)
         return Person.model_validate(d)
 
     @staticmethod
-    def _row_to_campaign(row: sqlite3.Row) -> Campaign:
-        """Convert an sqlite3.Row to a Campaign model."""
+    def _row_to_campaign(row) -> Campaign:
+        """Convert a Row to a Campaign model."""
         d = dict(row)
         for field in ("enrichment_types", "waterfall_order", "column_mapping", "cost_by_provider"):
             if isinstance(d.get(field), str):
@@ -85,8 +103,8 @@ class Database:
         return Campaign.model_validate(d)
 
     @staticmethod
-    def _row_to_enrichment_result(row: sqlite3.Row) -> EnrichmentResult:
-        """Convert an sqlite3.Row to an EnrichmentResult model."""
+    def _row_to_enrichment_result(row) -> EnrichmentResult:
+        """Convert a Row to an EnrichmentResult model."""
         d = dict(row)
         for field in ("query_input", "result_data"):
             if isinstance(d.get(field), str):
@@ -123,17 +141,18 @@ class Database:
         raw = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(raw.encode()).hexdigest()
 
-    def cache_get(self, provider: str, enrichment_type: str, query_input: dict) -> Optional[dict]:
+    async def cache_get(self, provider: str, enrichment_type: str, query_input: dict) -> Optional[dict]:
         """Return cached response if not expired, increment hit_count."""
         cache_key = self._make_cache_key(provider, enrichment_type, query_input)
-        with self._connect() as conn:
-            row = conn.execute(
+        async with self._connect() as conn:
+            cursor = await conn.execute(
                 "SELECT * FROM cache WHERE cache_key = ? AND expires_at > CURRENT_TIMESTAMP",
                 (cache_key,),
-            ).fetchone()
+            )
+            row = await cursor.fetchone()
             if row is None:
                 return None
-            conn.execute(
+            await conn.execute(
                 "UPDATE cache SET hit_count = hit_count + 1 WHERE cache_key = ?",
                 (cache_key,),
             )
@@ -142,7 +161,7 @@ class Database:
             except (json.JSONDecodeError, TypeError):
                 return {}
 
-    def cache_set(
+    async def cache_set(
         self,
         provider: str,
         enrichment_type: str,
@@ -160,8 +179,8 @@ class Database:
         prov = provider if isinstance(provider, str) else provider.value
         etype = enrichment_type if isinstance(enrichment_type, str) else enrichment_type.value
 
-        with self._connect() as conn:
-            conn.execute(
+        async with self._connect() as conn:
+            await conn.execute(
                 """INSERT OR REPLACE INTO cache
                    (cache_key, provider, enrichment_type, query_hash,
                     response_data, found, expires_at, hit_count, created_at)
@@ -177,10 +196,10 @@ class Database:
                 ),
             )
 
-    def cache_purge_expired(self) -> int:
+    async def cache_purge_expired(self) -> int:
         """Delete expired entries, return count deleted."""
-        with self._connect() as conn:
-            cursor = conn.execute(
+        async with self._connect() as conn:
+            cursor = await conn.execute(
                 "DELETE FROM cache WHERE expires_at < CURRENT_TIMESTAMP"
             )
             return cursor.rowcount
@@ -189,8 +208,8 @@ class Database:
     # Company Operations
     # ------------------------------------------------------------------
 
-    def upsert_company(self, company: Company) -> Company:
-        """ON CONFLICT(domain) DO UPDATE with COALESCE for all fields."""
+    async def upsert_company(self, company: Company) -> Company:
+        """Upsert a company by domain (select-then-insert/update for partial index compat)."""
         now = datetime.utcnow().isoformat()
         industry_tags_json = json.dumps(company.industry_tags)
         revenue = float(company.revenue_usd) if company.revenue_usd is not None else None
@@ -198,73 +217,92 @@ class Database:
         source = company.source_provider.value if company.source_provider else None
         enriched = company.enriched_at.isoformat() if company.enriched_at else None
 
-        with self._connect() as conn:
-            conn.execute(
-                """INSERT INTO companies
-                   (id, name, domain, industry, industry_tags, employee_count,
-                    employee_range, revenue_usd, ebitda_usd, founded_year,
-                    description, city, state, country, full_address,
-                    linkedin_url, website_url, phone, source_provider,
-                    apollo_id, enriched_at, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                   ON CONFLICT(domain) DO UPDATE SET
-                    name = COALESCE(excluded.name, companies.name),
-                    industry = COALESCE(excluded.industry, companies.industry),
-                    industry_tags = CASE
-                        WHEN excluded.industry_tags IS NOT NULL AND excluded.industry_tags != '[]'
-                        THEN excluded.industry_tags
-                        ELSE companies.industry_tags
-                    END,
-                    employee_count = COALESCE(excluded.employee_count, companies.employee_count),
-                    employee_range = COALESCE(excluded.employee_range, companies.employee_range),
-                    revenue_usd = COALESCE(excluded.revenue_usd, companies.revenue_usd),
-                    ebitda_usd = COALESCE(excluded.ebitda_usd, companies.ebitda_usd),
-                    founded_year = COALESCE(excluded.founded_year, companies.founded_year),
-                    description = COALESCE(excluded.description, companies.description),
-                    city = COALESCE(excluded.city, companies.city),
-                    state = COALESCE(excluded.state, companies.state),
-                    country = COALESCE(excluded.country, companies.country),
-                    full_address = COALESCE(excluded.full_address, companies.full_address),
-                    linkedin_url = COALESCE(excluded.linkedin_url, companies.linkedin_url),
-                    website_url = COALESCE(excluded.website_url, companies.website_url),
-                    phone = COALESCE(excluded.phone, companies.phone),
-                    source_provider = COALESCE(excluded.source_provider, companies.source_provider),
-                    apollo_id = COALESCE(excluded.apollo_id, companies.apollo_id),
-                    enriched_at = COALESCE(excluded.enriched_at, companies.enriched_at),
-                    updated_at = excluded.updated_at""",
-                (
-                    company.id, company.name, company.domain, company.industry,
-                    industry_tags_json, company.employee_count, company.employee_range,
-                    revenue, ebitda, company.founded_year,
-                    company.description, company.city, company.state, company.country,
-                    company.full_address, company.linkedin_url, company.website_url,
-                    company.phone, source, company.apollo_id,
-                    enriched, now, now,
-                ),
-            )
-            # Fetch the final row (may have merged fields from existing record)
+        async with self._connect() as conn:
+            existing = None
             if company.domain:
-                row = conn.execute(
-                    "SELECT * FROM companies WHERE domain = ?", (company.domain,)
-                ).fetchone()
+                cursor = await conn.execute(
+                    "SELECT * FROM companies WHERE domain = ?",
+                    (company.domain.strip().lower(),),
+                )
+                existing = await cursor.fetchone()
+
+            if existing:
+                await conn.execute(
+                    """UPDATE companies SET
+                        name = COALESCE(?, name),
+                        industry = COALESCE(?, industry),
+                        industry_tags = CASE WHEN ? IS NOT NULL AND ? != '[]' THEN ? ELSE industry_tags END,
+                        employee_count = COALESCE(?, employee_count),
+                        employee_range = COALESCE(?, employee_range),
+                        revenue_usd = COALESCE(?, revenue_usd),
+                        ebitda_usd = COALESCE(?, ebitda_usd),
+                        founded_year = COALESCE(?, founded_year),
+                        description = COALESCE(?, description),
+                        city = COALESCE(?, city),
+                        state = COALESCE(?, state),
+                        country = COALESCE(?, country),
+                        full_address = COALESCE(?, full_address),
+                        linkedin_url = COALESCE(?, linkedin_url),
+                        website_url = COALESCE(?, website_url),
+                        phone = COALESCE(?, phone),
+                        source_provider = COALESCE(?, source_provider),
+                        apollo_id = COALESCE(?, apollo_id),
+                        enriched_at = COALESCE(?, enriched_at),
+                        updated_at = ?
+                    WHERE domain = ?""",
+                    (
+                        company.name, company.industry,
+                        industry_tags_json, industry_tags_json, industry_tags_json,
+                        company.employee_count, company.employee_range,
+                        revenue, ebitda, company.founded_year,
+                        company.description, company.city, company.state, company.country,
+                        company.full_address, company.linkedin_url, company.website_url,
+                        company.phone, source, company.apollo_id,
+                        enriched, now, company.domain.strip().lower(),
+                    ),
+                )
+                cursor = await conn.execute(
+                    "SELECT * FROM companies WHERE domain = ?",
+                    (company.domain.strip().lower(),),
+                )
             else:
-                row = conn.execute(
+                await conn.execute(
+                    """INSERT INTO companies
+                       (id, name, domain, industry, industry_tags, employee_count,
+                        employee_range, revenue_usd, ebitda_usd, founded_year,
+                        description, city, state, country, full_address,
+                        linkedin_url, website_url, phone, source_provider,
+                        apollo_id, enriched_at, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        company.id, company.name, company.domain, company.industry,
+                        industry_tags_json, company.employee_count, company.employee_range,
+                        revenue, ebitda, company.founded_year,
+                        company.description, company.city, company.state, company.country,
+                        company.full_address, company.linkedin_url, company.website_url,
+                        company.phone, source, company.apollo_id,
+                        enriched, now, now,
+                    ),
+                )
+                cursor = await conn.execute(
                     "SELECT * FROM companies WHERE id = ?", (company.id,)
-                ).fetchone()
+                )
+            row = await cursor.fetchone()
             return self._row_to_company(row)
 
-    def get_company_by_domain(self, domain: str) -> Optional[Company]:
+    async def get_company_by_domain(self, domain: str) -> Optional[Company]:
         """Fetch a company by its domain."""
         domain = domain.strip().lower()
-        with self._connect() as conn:
-            row = conn.execute(
+        async with self._connect() as conn:
+            cursor = await conn.execute(
                 "SELECT * FROM companies WHERE domain = ?", (domain,)
-            ).fetchone()
+            )
+            row = await cursor.fetchone()
             if row is None:
                 return None
             return self._row_to_company(row)
 
-    def search_companies(self, **filters) -> list[Company]:
+    async def search_companies(self, **filters) -> list[Company]:
         """Search companies with dynamic filters.
 
         Supported filters: industry, country, employee_min, employee_max,
@@ -300,15 +338,16 @@ class Database:
         where = " AND ".join(clauses) if clauses else "1=1"
         sql = f"SELECT * FROM companies WHERE {where} ORDER BY name"
 
-        with self._connect() as conn:
-            rows = conn.execute(sql, params).fetchall()
+        async with self._connect() as conn:
+            cursor = await conn.execute(sql, params)
+            rows = await cursor.fetchall()
             return [self._row_to_company(r) for r in rows]
 
     # ------------------------------------------------------------------
     # Person Operations
     # ------------------------------------------------------------------
 
-    def upsert_person(self, person: Person) -> Person:
+    async def upsert_person(self, person: Person) -> Person:
         """Upsert a person.
 
         Check existing by email first, then by (lower(first_name),
@@ -320,19 +359,20 @@ class Database:
         enriched = person.enriched_at.isoformat() if person.enriched_at else None
         email_status = person.email_status.value if person.email_status else "unknown"
 
-        with self._connect() as conn:
+        async with self._connect() as conn:
             existing = None
 
             # Check by email first
             if person.email:
-                existing = conn.execute(
+                cursor = await conn.execute(
                     "SELECT * FROM people WHERE email = ?",
                     (person.email.lower(),),
-                ).fetchone()
+                )
+                existing = await cursor.fetchone()
 
             # Then check by name + domain
             if existing is None and person.first_name and person.last_name and person.company_domain:
-                existing = conn.execute(
+                cursor = await conn.execute(
                     """SELECT * FROM people
                        WHERE lower(first_name) = ? AND lower(last_name) = ?
                        AND lower(company_domain) = ?""",
@@ -341,11 +381,12 @@ class Database:
                         person.last_name.lower(),
                         person.company_domain.lower(),
                     ),
-                ).fetchone()
+                )
+                existing = await cursor.fetchone()
 
             if existing:
                 existing_id = existing["id"]
-                conn.execute(
+                await conn.execute(
                     """UPDATE people SET
                         first_name = COALESCE(?, first_name),
                         last_name = COALESCE(?, last_name),
@@ -380,14 +421,15 @@ class Database:
                         source, person.apollo_id, enriched, now, existing_id,
                     ),
                 )
-                row = conn.execute(
+                cursor = await conn.execute(
                     "SELECT * FROM people WHERE id = ?", (existing_id,)
-                ).fetchone()
+                )
+                row = await cursor.fetchone()
                 return self._row_to_person(row)
             else:
                 # INSERT new person
                 person_id = person.id
-                conn.execute(
+                await conn.execute(
                     """INSERT INTO people
                        (id, first_name, last_name, full_name, title, seniority,
                         department, company_id, company_name, company_domain,
@@ -405,22 +447,24 @@ class Database:
                         source, person.apollo_id, enriched, now, now,
                     ),
                 )
-                row = conn.execute(
+                cursor = await conn.execute(
                     "SELECT * FROM people WHERE id = ?", (person_id,)
-                ).fetchone()
+                )
+                row = await cursor.fetchone()
                 return self._row_to_person(row)
 
-    def get_person_by_email(self, email: str) -> Optional[Person]:
+    async def get_person_by_email(self, email: str) -> Optional[Person]:
         """Fetch a person by email address."""
-        with self._connect() as conn:
-            row = conn.execute(
+        async with self._connect() as conn:
+            cursor = await conn.execute(
                 "SELECT * FROM people WHERE email = ?", (email.strip().lower(),)
-            ).fetchone()
+            )
+            row = await cursor.fetchone()
             if row is None:
                 return None
             return self._row_to_person(row)
 
-    def search_people(self, **filters) -> list[Person]:
+    async def search_people(self, **filters) -> list[Person]:
         """Search people with dynamic filters.
 
         Supported filters: company_domain, email_status, has_email (bool), country.
@@ -452,15 +496,16 @@ class Database:
         where = " AND ".join(clauses) if clauses else "1=1"
         sql = f"SELECT * FROM people WHERE {where} ORDER BY full_name"
 
-        with self._connect() as conn:
-            rows = conn.execute(sql, params).fetchall()
+        async with self._connect() as conn:
+            cursor = await conn.execute(sql, params)
+            rows = await cursor.fetchall()
             return [self._row_to_person(r) for r in rows]
 
     # ------------------------------------------------------------------
     # Campaign Operations
     # ------------------------------------------------------------------
 
-    def create_campaign(self, campaign: Campaign) -> Campaign:
+    async def create_campaign(self, campaign: Campaign) -> Campaign:
         """Insert a new campaign."""
         now = datetime.utcnow().isoformat()
         enrichment_types_json = json.dumps([e.value for e in campaign.enrichment_types])
@@ -470,8 +515,8 @@ class Database:
         started = campaign.started_at.isoformat() if campaign.started_at else None
         completed = campaign.completed_at.isoformat() if campaign.completed_at else None
 
-        with self._connect() as conn:
-            conn.execute(
+        async with self._connect() as conn:
+            await conn.execute(
                 """INSERT INTO campaigns
                    (id, name, description, input_file, input_row_count,
                     enrichment_types, waterfall_order, column_mapping, status,
@@ -491,18 +536,19 @@ class Database:
                     campaign.created_by, campaign.last_processed_row,
                 ),
             )
-            row = conn.execute(
+            cursor = await conn.execute(
                 "SELECT * FROM campaigns WHERE id = ?", (campaign.id,)
-            ).fetchone()
+            )
+            row = await cursor.fetchone()
             return self._row_to_campaign(row)
 
-    def update_campaign_status(self, campaign_id: str, status: CampaignStatus, **kwargs) -> None:
+    async def update_campaign_status(self, campaign_id: str, status: CampaignStatus, **kwargs) -> None:
         """Update campaign status plus any extra fields."""
         now = datetime.utcnow().isoformat()
         status_val = status.value if isinstance(status, CampaignStatus) else status
 
-        sets = ["status = ?", "updated_at = ?"]
-        params: list = [status_val, now]
+        sets = ["status = ?"]
+        params: list = [status_val]
 
         # Automatically set timestamps based on status
         if status_val == CampaignStatus.RUNNING.value:
@@ -530,50 +576,52 @@ class Database:
         params.append(campaign_id)
         sql = f"UPDATE campaigns SET {', '.join(sets)} WHERE id = ?"
 
-        with self._connect() as conn:
-            conn.execute(sql, params)
+        async with self._connect() as conn:
+            await conn.execute(sql, params)
 
-    def get_campaign(self, campaign_id: str) -> Optional[Campaign]:
+    async def get_campaign(self, campaign_id: str) -> Optional[Campaign]:
         """Fetch a single campaign by ID."""
-        with self._connect() as conn:
-            row = conn.execute(
+        async with self._connect() as conn:
+            cursor = await conn.execute(
                 "SELECT * FROM campaigns WHERE id = ?", (campaign_id,)
-            ).fetchone()
+            )
+            row = await cursor.fetchone()
             if row is None:
                 return None
             return self._row_to_campaign(row)
 
-    def get_recent_campaigns(self, limit: int = 10) -> list[Campaign]:
+    async def get_recent_campaigns(self, limit: int = 10) -> list[Campaign]:
         """Get recent campaigns ordered by created_at DESC."""
-        with self._connect() as conn:
-            rows = conn.execute(
+        async with self._connect() as conn:
+            cursor = await conn.execute(
                 "SELECT * FROM campaigns ORDER BY created_at DESC LIMIT ?", (limit,)
-            ).fetchall()
+            )
+            rows = await cursor.fetchall()
             return [self._row_to_campaign(r) for r in rows]
 
     # ------------------------------------------------------------------
     # Campaign Row Operations
     # ------------------------------------------------------------------
 
-    def create_campaign_rows(self, campaign_id: str, rows: list[dict]) -> None:
+    async def create_campaign_rows(self, campaign_id: str, rows: list[dict]) -> None:
         """Bulk insert campaign rows."""
-        with self._connect() as conn:
+        async with self._connect() as conn:
             for i, row_data in enumerate(rows):
                 row_id = str(uuid.uuid4())
-                conn.execute(
+                await conn.execute(
                     """INSERT INTO campaign_rows
                        (id, campaign_id, row_number, input_data, status)
                        VALUES (?, ?, ?, ?, 'pending')""",
                     (row_id, campaign_id, i + 1, json.dumps(row_data)),
                 )
 
-    def update_campaign_row(
+    async def update_campaign_row(
         self, row_id: str, status: str, person_id: str = None, error: str = None
     ) -> None:
         """Update a single campaign row's status and optional fields."""
         now = datetime.utcnow().isoformat()
-        with self._connect() as conn:
-            conn.execute(
+        async with self._connect() as conn:
+            await conn.execute(
                 """UPDATE campaign_rows SET
                     status = ?,
                     person_id = COALESCE(?, person_id),
@@ -583,16 +631,17 @@ class Database:
                 (status, person_id, error, now, row_id),
             )
 
-    def get_pending_rows(self, campaign_id: str, limit: int = 100) -> list[dict]:
+    async def get_pending_rows(self, campaign_id: str, limit: int = 100) -> list[dict]:
         """Get pending rows for a campaign."""
-        with self._connect() as conn:
-            rows = conn.execute(
+        async with self._connect() as conn:
+            cursor = await conn.execute(
                 """SELECT * FROM campaign_rows
                    WHERE campaign_id = ? AND status = 'pending'
                    ORDER BY row_number
                    LIMIT ?""",
                 (campaign_id, limit),
-            ).fetchall()
+            )
+            rows = await cursor.fetchall()
             result = []
             for r in rows:
                 d = dict(r)
@@ -608,10 +657,10 @@ class Database:
     # Enrichment Results
     # ------------------------------------------------------------------
 
-    def save_enrichment_result(self, result: EnrichmentResult) -> None:
+    async def save_enrichment_result(self, result: EnrichmentResult) -> None:
         """Insert an enrichment result."""
-        with self._connect() as conn:
-            conn.execute(
+        async with self._connect() as conn:
+            await conn.execute(
                 """INSERT INTO enrichment_results
                    (id, person_id, company_id, campaign_id, enrichment_type,
                     query_input, source_provider, result_data, found,
@@ -631,7 +680,7 @@ class Database:
                 ),
             )
 
-    def get_enrichment_results(self, **filters) -> list[EnrichmentResult]:
+    async def get_enrichment_results(self, **filters) -> list[EnrichmentResult]:
         """Search enrichment results with dynamic filters.
 
         Supported filters: campaign_id, person_id, source_provider, found.
@@ -661,23 +710,24 @@ class Database:
         where = " AND ".join(clauses) if clauses else "1=1"
         sql = f"SELECT * FROM enrichment_results WHERE {where} ORDER BY found_at DESC"
 
-        with self._connect() as conn:
-            rows = conn.execute(sql, params).fetchall()
+        async with self._connect() as conn:
+            cursor = await conn.execute(sql, params)
+            rows = await cursor.fetchall()
             return [self._row_to_enrichment_result(r) for r in rows]
 
     # ------------------------------------------------------------------
     # Credit Usage
     # ------------------------------------------------------------------
 
-    def record_credit_usage(self, provider: str, credits: float, found: bool) -> None:
+    async def record_credit_usage(self, provider: str, credits: float, found: bool) -> None:
         """Upsert credit usage for today's date."""
         today = date.today().isoformat()
         prov = provider if isinstance(provider, str) else provider.value
         usage_id = str(uuid.uuid4())
         now = datetime.utcnow().isoformat()
 
-        with self._connect() as conn:
-            conn.execute(
+        async with self._connect() as conn:
+            await conn.execute(
                 """INSERT INTO credit_usage
                    (id, provider, date, credits_used, api_calls_made,
                     successful_lookups, failed_lookups, updated_at)
@@ -696,29 +746,31 @@ class Database:
                 ),
             )
 
-    def get_credit_usage(self, provider: str, days: int = 30) -> list[dict]:
+    async def get_credit_usage(self, provider: str, days: int = 30) -> list[dict]:
         """Get daily credit usage for last N days."""
         prov = provider if isinstance(provider, str) else provider.value
         cutoff = (date.today() - timedelta(days=days)).isoformat()
 
-        with self._connect() as conn:
-            rows = conn.execute(
+        async with self._connect() as conn:
+            cursor = await conn.execute(
                 """SELECT * FROM credit_usage
                    WHERE provider = ? AND date >= ?
                    ORDER BY date DESC""",
                 (prov, cutoff),
-            ).fetchall()
+            )
+            rows = await cursor.fetchall()
             return [dict(r) for r in rows]
 
-    def get_daily_usage(self, provider: str, date_str: str) -> dict:
+    async def get_daily_usage(self, provider: str, date_str: str) -> dict:
         """Get credit usage for a specific provider and date."""
         prov = provider if isinstance(provider, str) else provider.value
 
-        with self._connect() as conn:
-            row = conn.execute(
+        async with self._connect() as conn:
+            cursor = await conn.execute(
                 "SELECT * FROM credit_usage WHERE provider = ? AND date = ?",
                 (prov, date_str),
-            ).fetchone()
+            )
+            row = await cursor.fetchone()
             if row is None:
                 return {
                     "provider": prov,
@@ -734,13 +786,14 @@ class Database:
     # Email Patterns
     # ------------------------------------------------------------------
 
-    def get_domain_patterns(self, domain: str) -> list[dict]:
+    async def get_domain_patterns(self, domain: str) -> list[dict]:
         """Return all email patterns for a domain."""
-        with self._connect() as conn:
-            rows = conn.execute(
+        async with self._connect() as conn:
+            cursor = await conn.execute(
                 "SELECT * FROM email_patterns WHERE domain = ? ORDER BY confidence DESC",
                 (domain.lower(),),
-            ).fetchall()
+            )
+            rows = await cursor.fetchall()
             results = []
             for r in rows:
                 d = dict(r)
@@ -752,7 +805,7 @@ class Database:
                 results.append(d)
             return results
 
-    def record_pattern(
+    async def record_pattern(
         self, domain: str, pattern: str, email: str, confidence: float
     ) -> None:
         """Upsert an email pattern, increment sample_count, append to examples."""
@@ -760,11 +813,12 @@ class Database:
         pattern_id = str(uuid.uuid4())
         now = datetime.utcnow().isoformat()
 
-        with self._connect() as conn:
-            existing = conn.execute(
+        async with self._connect() as conn:
+            cursor = await conn.execute(
                 "SELECT * FROM email_patterns WHERE domain = ? AND pattern = ?",
                 (domain, pattern),
-            ).fetchone()
+            )
+            existing = await cursor.fetchone()
 
             if existing:
                 # Update existing: increment sample_count, append example, update confidence
@@ -778,7 +832,7 @@ class Database:
                 if email not in examples:
                     examples.append(email)
 
-                conn.execute(
+                await conn.execute(
                     """UPDATE email_patterns SET
                         confidence = ?,
                         sample_count = sample_count + 1,
@@ -788,7 +842,7 @@ class Database:
                     (confidence, json.dumps(examples), now, existing["id"]),
                 )
             else:
-                conn.execute(
+                await conn.execute(
                     """INSERT INTO email_patterns
                        (id, domain, pattern, confidence, sample_count, examples,
                         discovered_at, updated_at)
@@ -803,13 +857,14 @@ class Database:
     # Catch-All Cache
     # ------------------------------------------------------------------
 
-    def get_catch_all_status(self, domain: str) -> Optional[bool]:
+    async def get_catch_all_status(self, domain: str) -> Optional[bool]:
         """Check domain_catch_all table. Return None if not checked or expired >90 days."""
-        with self._connect() as conn:
-            row = conn.execute(
+        async with self._connect() as conn:
+            cursor = await conn.execute(
                 "SELECT * FROM domain_catch_all WHERE domain = ?",
                 (domain.lower(),),
-            ).fetchone()
+            )
+            row = await cursor.fetchone()
             if row is None:
                 return None
             # Check if expired (>90 days)
@@ -823,11 +878,11 @@ class Database:
                     pass
             return bool(row["is_catch_all"])
 
-    def set_catch_all_status(self, domain: str, is_catch_all: bool) -> None:
+    async def set_catch_all_status(self, domain: str, is_catch_all: bool) -> None:
         """Set or update catch-all status for a domain."""
         now = datetime.utcnow().isoformat()
-        with self._connect() as conn:
-            conn.execute(
+        async with self._connect() as conn:
+            await conn.execute(
                 """INSERT OR REPLACE INTO domain_catch_all
                    (domain, is_catch_all, checked_at)
                    VALUES (?, ?, ?)""",
@@ -838,32 +893,29 @@ class Database:
     # Dashboard Stats
     # ------------------------------------------------------------------
 
-    def get_dashboard_stats(self) -> dict:
+    async def get_dashboard_stats(self) -> dict:
         """Single query returning dashboard statistics."""
-        with self._connect() as conn:
-            # Total enriched people (those with an email found)
-            total_enriched = conn.execute(
+        async with self._connect() as conn:
+            cursor = await conn.execute(
                 "SELECT COUNT(*) FROM people WHERE email IS NOT NULL AND email != ''"
-            ).fetchone()[0]
+            )
+            total_enriched = (await cursor.fetchone())[0]
 
-            # Email find rate
-            total_people = conn.execute("SELECT COUNT(*) FROM people").fetchone()[0]
+            cursor = await conn.execute("SELECT COUNT(*) FROM people")
+            total_people = (await cursor.fetchone())[0]
             email_find_rate = (
                 round(total_enriched / total_people * 100, 1) if total_people > 0 else 0.0
             )
 
-            # Total campaigns
-            total_campaigns = conn.execute(
-                "SELECT COUNT(*) FROM campaigns"
-            ).fetchone()[0]
+            cursor = await conn.execute("SELECT COUNT(*) FROM campaigns")
+            total_campaigns = (await cursor.fetchone())[0]
 
-            # Cost in last 30 days
             cutoff = (date.today() - timedelta(days=30)).isoformat()
-            cost_row = conn.execute(
+            cursor = await conn.execute(
                 "SELECT COALESCE(SUM(credits_used), 0.0) FROM credit_usage WHERE date >= ?",
                 (cutoff,),
-            ).fetchone()
-            cost_30d = cost_row[0]
+            )
+            cost_30d = (await cursor.fetchone())[0]
 
             return {
                 "total_enriched": total_enriched,
@@ -876,7 +928,7 @@ class Database:
     # Audit Log
     # ------------------------------------------------------------------
 
-    def log_action(
+    async def log_action(
         self,
         action: str,
         entity_type: str = None,
@@ -885,8 +937,8 @@ class Database:
         user_id: str = None,
     ) -> None:
         """Write an entry to the audit log."""
-        with self._connect() as conn:
-            conn.execute(
+        async with self._connect() as conn:
+            await conn.execute(
                 """INSERT INTO audit_log
                    (user_id, action, entity_type, entity_id, details)
                    VALUES (?, ?, ?, ?, ?)""",

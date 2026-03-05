@@ -1,0 +1,31 @@
+[project]
+name = "clay-dupe"
+version = "0.1.0"
+description = "Self-hosted B2B enrichment platform with waterfall provider cascade"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx[http2]>=0.27",
+    "pydantic>=2.0",
+    "pydantic[email]",
+    "python-dotenv>=1.0",
+    "pandas>=2.0",
+    "openpyxl>=3.1",
+    "rapidfuzz>=3.0",
+    "streamlit>=1.37",
+    "streamlit-sortables>=0.3",
+    "typer>=0.12",
+    "dnspython>=2.4",
+    "nest-asyncio>=1.6",
+    "rich>=13.0",
+    "aiosqlite>=0.20",
+    "aiometer>=0.5",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[project.scripts]
+clay-dupe = "cli.main:main"

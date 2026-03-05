@@ -12,7 +12,7 @@ This milestone hardens and scales a functioning self-hosted B2B waterfall enrich
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Infrastructure Foundation** - Pin Python >= 3.11, migrate to aiosqlite, and integrate aiometer — prerequisites for all async refactoring
+- [x] **Phase 1: Infrastructure Foundation** - Pin Python >= 3.11, migrate to aiosqlite, and integrate aiometer — prerequisites for all async refactoring
 - [ ] **Phase 2: Exception & Response Hardening** - Replace bare exception handlers with typed boundaries and add .get() fallbacks on all API response parsing
 - [ ] **Phase 3: Data Layer Hardening** - Eliminate SQL injection via parameterized queries and add input validation before all provider API calls
 - [ ] **Phase 4: Operational Hardening** - Add API key rotation, SMTP rate limiting, and atomic budget/state transactions
@@ -36,9 +36,9 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: TBD
 
 Plans:
-- [ ] 01-01: Pin Python >= 3.11 in pyproject.toml and verify startup enforcement
-- [ ] 01-02: Migrate database.py from sqlite3 to aiosqlite with full async/await coverage
-- [ ] 01-03: Integrate aiometer into waterfall batch loop replacing bare asyncio.Semaphore
+- [x] 01-01: Pin Python >= 3.11 in pyproject.toml and verify startup enforcement
+- [x] 01-02: Migrate database.py from sqlite3 to aiosqlite with full async/await coverage
+- [x] 01-03: Integrate aiometer into waterfall batch loop replacing bare asyncio.Semaphore
 
 ### Phase 2: Exception & Response Hardening
 **Goal**: Every provider failure mode is named and visible — no exception is silently swallowed, no API response field access can KeyError-crash the pipeline
@@ -177,7 +177,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Infrastructure Foundation | 0/3 | Not started | - |
+| 1. Infrastructure Foundation | 3/3 | Complete | 2026-03-04 |
 | 2. Exception & Response Hardening | 0/2 | Not started | - |
 | 3. Data Layer Hardening | 0/2 | Not started | - |
 | 4. Operational Hardening | 0/3 | Not started | - |

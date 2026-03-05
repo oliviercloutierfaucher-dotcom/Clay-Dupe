@@ -434,7 +434,7 @@ class PatternEngine:
             7. Return email if found, ``None`` otherwise.
         """
         # Step 1: Retrieve known patterns from DB
-        domain_patterns = self.db.get_domain_patterns(domain)
+        domain_patterns = await self.db.get_domain_patterns(domain)
         if not domain_patterns:
             return None
 
@@ -465,12 +465,12 @@ class PatternEngine:
             return None
 
         # Step 4: Check catch-all status
-        is_catch_all = self.db.get_catch_all_status(domain)
+        is_catch_all = await self.db.get_catch_all_status(domain)
         if is_catch_all is None:
             # Fall back to verifier detection
             is_catch_all = self.verifier.detect_catch_all(domain)
             if is_catch_all is not None:
-                self.db.set_catch_all_status(domain, is_catch_all)
+                await self.db.set_catch_all_status(domain, is_catch_all)
 
         # Step 5 & 6: Verify or return based on catch-all status
         if not is_catch_all:
@@ -489,7 +489,7 @@ class PatternEngine:
             # Confidence too low for unverified guess on catch-all
             return None
 
-    def learn_pattern(
+    async def learn_pattern(
         self,
         email: str,
         first_name: str,
@@ -509,4 +509,4 @@ class PatternEngine:
         # as a starting point; the DB will track sample_count for Bayesian
         # confidence on subsequent lookups.
         base_confidence = PATTERN_FREQUENCY.get(pattern, 0.01)
-        self.db.record_pattern(domain, pattern, email, base_confidence)
+        await self.db.record_pattern(domain, pattern, email, base_confidence)

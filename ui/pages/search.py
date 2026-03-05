@@ -12,6 +12,7 @@ from config.settings import ProviderName, ICP_PRESETS, ICPPreset
 from data.models import Company, Person, Campaign, EnrichmentType, CampaignStatus
 from providers.apollo import ApolloProvider
 
+from data.sync import run_sync
 from ui.app import get_database, get_settings
 
 # ---------------------------------------------------------------------------
@@ -23,7 +24,7 @@ _EXECUTOR = ThreadPoolExecutor(max_workers=2)
 
 def _run_async(coro):
     """Run an async coroutine from synchronous Streamlit code."""
-    return asyncio.run(coro)
+    return run_sync(coro)
 
 
 def _get_apollo() -> ApolloProvider | None:
@@ -241,7 +242,7 @@ if "search_results_df" in st.session_state:
             status=CampaignStatus.CREATED,
             total_rows=len(selected_rows),
         )
-        campaign = db.create_campaign(campaign)
+        campaign = run_sync(db.create_campaign(campaign))
 
         # Store selected people/companies as campaign rows
         row_dicts = []
@@ -268,7 +269,7 @@ if "search_results_df" in st.session_state:
                     })
 
         if row_dicts:
-            db.create_campaign_rows(campaign.id, row_dicts)
+            run_sync(db.create_campaign_rows(campaign.id, row_dicts))
             st.success(
                 f"Campaign **{campaign.name}** created with {len(row_dicts)} rows.  "
                 f"Go to **Enrich** to configure and run it."

@@ -30,6 +30,7 @@ from data.models import (
     EnrichmentType,
 )
 
+from data.sync import run_sync
 from ui.app import get_database, get_settings
 
 # ---------------------------------------------------------------------------
@@ -333,11 +334,11 @@ elif current_step == 5:
                     cached_rows += 1
 
         tracker = CostTracker(db)
-        estimate = tracker.estimate_campaign_cost(
+        estimate = run_sync(tracker.estimate_campaign_cost(
             total_rows=total_rows,
             cached_rows=cached_rows,
             waterfall_order=waterfall,
-        )
+        ))
 
         # Display summary
         summary_cols = st.columns(4)
@@ -390,8 +391,8 @@ elif current_step == 5:
                     total_rows=len(mapped_records),
                     estimated_cost_usd=estimate["total_estimated_cost_usd"],
                 )
-                campaign = db.create_campaign(campaign)
-                db.create_campaign_rows(campaign.id, mapped_records)
+                campaign = run_sync(db.create_campaign(campaign))
+                run_sync(db.create_campaign_rows(campaign.id, mapped_records))
                 st.session_state["enrich_campaign_id"] = campaign.id
                 _set_step(6)
                 st.rerun()
@@ -414,12 +415,12 @@ elif current_step == 6:
 
         with control_cols[0]:
             if st.button("Pause", icon=":material/pause:", use_container_width=True):
-                db.update_campaign_status(campaign_id, CampaignStatus.PAUSED)
+                run_sync(db.update_campaign_status(campaign_id, CampaignStatus.PAUSED))
                 st.toast("Campaign paused.")
 
         with control_cols[1]:
             if st.button("Cancel", icon=":material/cancel:", type="secondary", use_container_width=True):
-                db.update_campaign_status(campaign_id, CampaignStatus.CANCELLED)
+                run_sync(db.update_campaign_status(campaign_id, CampaignStatus.CANCELLED))
                 st.toast("Campaign cancelled.")
 
         st.divider()
@@ -429,7 +430,7 @@ elif current_step == 6:
         @st.fragment(run_every=2.0)
         def _poll_progress():
             """Auto-refreshing fragment that polls campaign progress."""
-            campaign = db.get_campaign(campaign_id)
+            campaign = run_sync(db.get_campaign(campaign_id))
             if campaign is None:
                 st.error("Campaign not found.")
                 return
@@ -486,7 +487,7 @@ elif current_step == 6:
             log_container = st.container(height=200)
             with log_container:
                 # Show recent enrichment results for this campaign
-                recent = db.get_enrichment_results(campaign_id=campaign_id)
+                recent = run_sync(db.get_enrichment_results(campaign_id=campaign_id))
                 for r in recent[:20]:
                     icon = ":white_check_mark:" if r.found else ":x:"
                     provider = r.source_provider.value if r.source_provider else "?"

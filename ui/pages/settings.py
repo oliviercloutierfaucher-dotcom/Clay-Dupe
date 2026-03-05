@@ -12,6 +12,7 @@ from providers.findymail import FindymailProvider
 from providers.icypeas import IcypeasProvider
 from providers.contactout import ContactOutProvider
 
+from data.sync import run_sync
 from ui.app import get_database, get_settings
 
 # ---------------------------------------------------------------------------
@@ -30,7 +31,7 @@ _PROVIDER_CLASSES = {
 
 def _run_async(coro):
     """Run an async coroutine from synchronous Streamlit code."""
-    return asyncio.run(coro)
+    return run_sync(coro)
 
 
 def _mask_key(key: str) -> str:
@@ -197,28 +198,36 @@ cache_cols = st.columns(3)
 
 with cache_cols[0]:
     st.markdown("**Cache Statistics**")
-    with db._connect() as conn:
-        total_cached = conn.execute("SELECT COUNT(*) FROM cache").fetchone()[0]
-        expired = conn.execute(
-            "SELECT COUNT(*) FROM cache WHERE expires_at < CURRENT_TIMESTAMP"
-        ).fetchone()[0]
-        active = total_cached - expired
-        total_hits = conn.execute(
-            "SELECT COALESCE(SUM(hit_count), 0) FROM cache"
-        ).fetchone()[0]
+    async def _fetch_cache_stats():
+        async with db._connect() as conn:
+            cur = await conn.execute("SELECT COUNT(*) FROM cache")
+            total_cached = (await cur.fetchone())[0]
+            cur = await conn.execute(
+                "SELECT COUNT(*) FROM cache WHERE expires_at < CURRENT_TIMESTAMP"
+            )
+            expired = (await cur.fetchone())[0]
+            active = total_cached - expired
+            cur = await conn.execute("SELECT COALESCE(SUM(hit_count), 0) FROM cache")
+            total_hits = (await cur.fetchone())[0]
+        return active, expired, total_hits
 
-    st.metric("Active Entries", f"{active:,}")
-    st.metric("Expired Entries", f"{expired:,}")
-    st.metric("Total Cache Hits", f"{total_hits:,}")
+    _active, _expired, _total_hits = run_sync(_fetch_cache_stats())
+    st.metric("Active Entries", f"{_active:,}")
+    st.metric("Expired Entries", f"{_expired:,}")
+    st.metric("Total Cache Hits", f"{_total_hits:,}")
 
 with cache_cols[1]:
     st.markdown("**Cache by Provider**")
-    with db._connect() as conn:
-        rows = conn.execute(
-            "SELECT provider, COUNT(*) as cnt, SUM(hit_count) as hits "
-            "FROM cache WHERE expires_at > CURRENT_TIMESTAMP "
-            "GROUP BY provider"
-        ).fetchall()
+    async def _fetch_cache_by_provider():
+        async with db._connect() as conn:
+            cur = await conn.execute(
+                "SELECT provider, COUNT(*) as cnt, SUM(hit_count) as hits "
+                "FROM cache WHERE expires_at > CURRENT_TIMESTAMP "
+                "GROUP BY provider"
+            )
+            return await cur.fetchall()
+
+    rows = run_sync(_fetch_cache_by_provider())
     for row in rows:
         st.markdown(f"- **{row['provider'].title()}**: {row['cnt']:,} entries, {row['hits']:,} hits")
     if not rows:
@@ -231,7 +240,7 @@ with cache_cols[2]:
         icon=":material/delete_sweep:",
         use_container_width=True,
     ):
-        purged = db.cache_purge_expired()
+        purged = run_sync(db.cache_purge_expired())
         st.success(f"Purged {purged:,} expired entries.")
         st.rerun()
 
@@ -241,8 +250,11 @@ with cache_cols[2]:
         type="secondary",
         use_container_width=True,
     ):
-        with db._connect() as conn:
-            conn.execute("DELETE FROM cache")
+        async def _clear_cache():
+            async with db._connect() as conn:
+                await conn.execute("DELETE FROM cache")
+
+        run_sync(_clear_cache())
         st.success("All cache entries cleared.")
         st.rerun()
 

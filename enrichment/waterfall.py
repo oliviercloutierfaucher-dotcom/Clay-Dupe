@@ -7,8 +7,11 @@ and result persistence for single and batch enrichment runs.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import time
+
+import aiometer
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional, TYPE_CHECKING
 
@@ -109,7 +112,7 @@ class WaterfallOrchestrator:
         # --- 1. Cache check ----------------------------------------------
         cache_query = self._build_cache_query(row, enrichment_type)
         for provider_name in self.providers:
-            cached = self.db.cache_get(
+            cached = await self.db.cache_get(
                 provider=provider_name.value,
                 enrichment_type=enrichment_type.value,
                 query_input=cache_query,
@@ -227,7 +230,7 @@ class WaterfallOrchestrator:
                 # 5a. Learn pattern
                 if email and first_name and last_name and domain:
                     try:
-                        self.pattern_engine.learn_pattern(
+                        await self.pattern_engine.learn_pattern(
                             email, first_name, last_name, domain,
                         )
                     except Exception:
@@ -237,7 +240,7 @@ class WaterfallOrchestrator:
                 effective_provider = provider_name or ProviderName.APOLLO
                 response_cache = self._response_to_cache_dict(response, verification_status)
                 try:
-                    self.db.cache_set(
+                    await self.db.cache_set(
                         provider=effective_provider.value,
                         enrichment_type=enrichment_type.value,
                         query_input=cache_query,
@@ -248,7 +251,7 @@ class WaterfallOrchestrator:
                     logger.exception("Failed to cache result")
 
                 # 5c. Persist person / company to DB
-                person_id = self._persist_entities(
+                person_id = await self._persist_entities(
                     row, response, effective_provider,
                 )
 
@@ -274,11 +277,11 @@ class WaterfallOrchestrator:
                 )
 
                 try:
-                    self.db.save_enrichment_result(result)
+                    await self.db.save_enrichment_result(result)
                 except Exception:
                     logger.exception("Failed to save enrichment result")
 
-                self.db.log_action(
+                await self.db.log_action(
                     action="enrichment_success",
                     entity_type="person",
                     entity_id=person_id,
@@ -303,11 +306,11 @@ class WaterfallOrchestrator:
         )
 
         try:
-            self.db.save_enrichment_result(not_found)
+            await self.db.save_enrichment_result(not_found)
         except Exception:
             logger.exception("Failed to save not-found result")
 
-        self.db.log_action(
+        await self.db.log_action(
             action="enrichment_not_found",
             entity_type="row",
             details={
@@ -343,39 +346,36 @@ class WaterfallOrchestrator:
         list[EnrichmentResult]
             Results in the same order as the input rows.
         """
-        semaphore = asyncio.Semaphore(_DEFAULT_BATCH_CONCURRENCY)
-        results: list[Optional[EnrichmentResult]] = [None] * len(rows)
         completed = 0
 
-        async def _worker(index: int, row: dict) -> None:
+        async def _worker(indexed_row: tuple[int, dict]) -> EnrichmentResult:
             nonlocal completed
-            async with semaphore:
+            index, row = indexed_row
+            try:
+                result = await self.enrich_single(row, campaign_id=campaign_id)
+            except Exception:
+                logger.exception("Batch worker failed for row %d", index)
+                result = self._not_found_result(
+                    enrichment_type=self._infer_enrichment_type(row),
+                    query_input=self._build_cache_query(
+                        row, self._infer_enrichment_type(row),
+                    ),
+                    campaign_id=campaign_id,
+                )
+            completed += 1
+            if progress_callback is not None:
                 try:
-                    result = await self.enrich_single(row, campaign_id=campaign_id)
+                    progress_callback(completed, len(rows), result)
                 except Exception:
-                    logger.exception("Batch worker failed for row %d", index)
-                    result = self._not_found_result(
-                        enrichment_type=self._infer_enrichment_type(row),
-                        query_input=self._build_cache_query(
-                            row, self._infer_enrichment_type(row),
-                        ),
-                        campaign_id=campaign_id,
-                    )
-                results[index] = result
-                completed += 1
-                if progress_callback is not None:
-                    try:
-                        progress_callback(completed, len(rows), result)
-                    except Exception:
-                        logger.exception("Progress callback error")
+                    logger.exception("Progress callback error")
+            return result
 
-        tasks = [
-            asyncio.create_task(_worker(i, row))
-            for i, row in enumerate(rows)
-        ]
-        await asyncio.gather(*tasks)
+        ordered_results: list[EnrichmentResult] = await aiometer.run_all(
+            [functools.partial(_worker, (i, row)) for i, row in enumerate(rows)],
+            max_at_once=_DEFAULT_BATCH_CONCURRENCY,
+        )
 
-        return [r for r in results if r is not None]
+        return ordered_results
 
     # ------------------------------------------------------------------
     # Step execution
@@ -438,7 +438,7 @@ class WaterfallOrchestrator:
 
         # Budget gate (skip for free actions)
         if not is_free:
-            if not self.budget.can_spend(
+            if not await self.budget.can_spend(
                 provider_name, credits=1.0, campaign_id=campaign_id,
             ):
                 logger.info(
@@ -557,7 +557,7 @@ class WaterfallOrchestrator:
                     cb.record_success()
 
             if not is_free and response.credits_used > 0:
-                self.budget.record_spend(
+                await self.budget.record_spend(
                     provider=provider_name,
                     credits=response.credits_used,
                     campaign_id=campaign_id,
@@ -647,7 +647,7 @@ class WaterfallOrchestrator:
             "verification_status": verification_status.value,
         }
 
-    def _persist_entities(
+    async def _persist_entities(
         self,
         row: dict,
         response: ProviderResponse,
@@ -673,7 +673,7 @@ class WaterfallOrchestrator:
                 source_provider=provider_name,
                 enriched_at=now,
             )
-            saved = self.db.upsert_person(person)
+            saved = await self.db.upsert_person(person)
             person_id = saved.id
         except Exception:
             logger.exception("Failed to persist person")
@@ -698,7 +698,7 @@ class WaterfallOrchestrator:
                     source_provider=provider_name,
                     enriched_at=now,
                 )
-                self.db.upsert_company(company)
+                await self.db.upsert_company(company)
             except Exception:
                 logger.exception("Failed to persist company")
 
