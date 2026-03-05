@@ -253,6 +253,10 @@ CREATE INDEX IF NOT EXISTS ix_cache_provider_type
 CREATE INDEX IF NOT EXISTS ix_cache_expires_at
     ON cache(expires_at);
 
+-- Composite index for fast cache lookups by provider + type + hash with expiry filter.
+CREATE INDEX IF NOT EXISTS ix_cache_lookup
+    ON cache(provider, enrichment_type, query_hash, expires_at);
+
 -- Trigger: after inserting a new cache row, delete up to 100 expired rows.
 CREATE TRIGGER IF NOT EXISTS trg_cache_cleanup
 AFTER INSERT ON cache

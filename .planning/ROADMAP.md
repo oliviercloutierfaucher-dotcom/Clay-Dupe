@@ -16,10 +16,10 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 2: Exception & Response Hardening** - Replace bare exception handlers with typed boundaries and add .get() fallbacks on all API response parsing
 - [x] **Phase 3: Data Layer Hardening** - Eliminate SQL injection via parameterized queries and add input validation before all provider API calls
 - [x] **Phase 4: Operational Hardening** - Add API key rotation, SMTP rate limiting, and atomic budget/state transactions
-- [ ] **Phase 5: I/O & Concurrency Performance** - Implement chunked batch processing, shared HTTP connection pool, and adaptive per-provider concurrency
-- [ ] **Phase 6: Cache & Database Performance** - Add cache table indexes, automatic cache eviction, and WAL checkpoint management
-- [ ] **Phase 7: Campaign State Management** - Add checkpoint-per-row progress tracking, pause flag, and resume from last checkpoint
-- [ ] **Phase 8: New Capabilities** - Deliver cross-campaign deduplication, full audit trail, provider A/B testing, and pattern deduplication
+- [x] **Phase 5: I/O & Concurrency Performance** - Implement chunked batch processing, shared HTTP connection pool, and adaptive per-provider concurrency
+- [x] **Phase 6: Cache & Database Performance** - Add cache table indexes, automatic cache eviction, and WAL checkpoint management
+- [x] **Phase 7: Campaign State Management** - Add checkpoint-per-row progress tracking, pause flag, and resume from last checkpoint
+- [x] **Phase 8: New Capabilities** - Deliver cross-campaign deduplication, full audit trail, provider A/B testing, and pattern deduplication
 - [ ] **Phase 9: Testing & Quality** - Close coverage gaps: standardized retry logic, CLI integration tests, waterfall edge cases, malformed response handling, concurrent DB access
 
 ## Phase Details
@@ -98,9 +98,9 @@ Plans:
 **Plans**: TBD
 
 Plans:
-- [ ] 05-01: Implement chunked batch processing in waterfall.py — explicit chunk iteration replacing asyncio.gather() on full CSV
-- [ ] 05-02: Create providers/http_pool.py shared AsyncClient singleton and inject into all 4 provider constructors
-- [ ] 05-03: Add adaptive concurrency limits using aiometer — per-provider backoff on 429 with gradual recovery
+- [x] 05-01: Implement chunked batch processing in waterfall.py — explicit chunk iteration replacing asyncio.gather() on full CSV
+- [x] 05-02: Create providers/http_pool.py shared AsyncClient singleton and inject into all 4 provider constructors
+- [x] 05-03: Add adaptive concurrency limits using aiometer — per-provider backoff on 429 with gradual recovery
 
 ### Phase 6: Cache & Database Performance
 **Goal**: Cache lookups remain fast as the table grows to tens of thousands of rows, expired entries are evicted automatically, and WAL files do not grow unbounded during sustained batch runs
@@ -114,9 +114,9 @@ Plans:
 **Plans**: TBD
 
 Plans:
-- [ ] 06-01: Add composite indexes to cache table on (provider, enrichment_type, query_hash, expires_at)
-- [ ] 06-02: Implement automatic cache eviction — remove expired entries and enforce row-count cap per pass
-- [ ] 06-03: Add WAL checkpoint management between batch chunks in waterfall.py
+- [x] 06-01: Add composite indexes to cache table on (provider, enrichment_type, query_hash, expires_at)
+- [x] 06-02: Implement automatic cache eviction — remove expired entries and enforce row-count cap per pass
+- [x] 06-03: Add WAL checkpoint management between batch chunks in waterfall.py
 
 ### Phase 7: Campaign State Management
 **Goal**: Every campaign row has an individual status, batches can be paused and resumed without reprocessing completed rows, and the system recovers gracefully from mid-batch crashes
@@ -130,9 +130,9 @@ Plans:
 **Plans**: TBD
 
 Plans:
-- [ ] 07-01: Add campaign_rows table with individual row status tracking (pending, processing, complete, failed)
-- [ ] 07-02: Implement pause flag on campaigns — batch loop checks between rows and halts when paused
-- [ ] 07-03: Implement resume logic — query for pending/failed rows and continue from checkpoint position
+- [x] 07-01: Add campaign_rows table with individual row status tracking (pending, processing, complete, failed)
+- [x] 07-02: Implement pause flag on campaigns — batch loop checks between rows and halts when paused
+- [x] 07-03: Implement resume logic — query for pending/failed rows and continue from checkpoint position
 
 ### Phase 8: New Capabilities
 **Goal**: The platform eliminates duplicate enrichment spend across campaigns, provides a complete per-call audit trail, enables data-driven waterfall optimization via A/B testing, and stores email patterns without duplicates
@@ -146,10 +146,10 @@ Plans:
 **Plans**: TBD
 
 Plans:
-- [ ] 08-01: Implement cross-campaign contact deduplication — global contacts lookup by (domain + name) or email before waterfall dispatch
-- [ ] 08-02: Implement audit trail — append-only action_logs table with AuditLogger writing inside the enrichment transaction
-- [ ] 08-03: Implement provider A/B testing framework — shadow mode runs alternative waterfall config in parallel without affecting production output
-- [ ] 08-04: Add pattern deduplication — deduplicate stored patterns, no duplicate patterns per domain
+- [x] 08-01: Implement cross-campaign contact deduplication — global contacts lookup by (domain + name) or email before waterfall dispatch
+- [x] 08-02: Implement audit trail — append-only action_logs table with AuditLogger writing inside the enrichment transaction
+- [x] 08-03: Implement provider A/B testing framework — shadow mode runs alternative waterfall config in parallel without affecting production output
+- [x] 08-04: Add pattern deduplication — deduplicate stored patterns, no duplicate patterns per domain
 
 ### Phase 9: Testing & Quality
 **Goal**: All critical code paths have test coverage — retry logic is consistent across providers, CLI commands are integration tested, waterfall edge cases are covered, malformed responses are handled, and concurrent DB access is verified
@@ -181,8 +181,8 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 2. Exception & Response Hardening | 2/2 | Complete | 2026-03-04 |
 | 3. Data Layer Hardening | 2/2 | Complete | 2026-03-04 |
 | 4. Operational Hardening | 3/3 | Complete | 2026-03-04 |
-| 5. I/O & Concurrency Performance | 0/3 | Not started | - |
-| 6. Cache & Database Performance | 0/3 | Not started | - |
-| 7. Campaign State Management | 0/3 | Not started | - |
-| 8. New Capabilities | 0/4 | Not started | - |
+| 5. I/O & Concurrency Performance | 3/3 | Complete | 2026-03-04 |
+| 6. Cache & Database Performance | 3/3 | Complete | 2026-03-04 |
+| 7. Campaign State Management | 3/3 | Complete | 2026-03-04 |
+| 8. New Capabilities | 4/4 | Complete | 2026-03-04 |
 | 9. Testing & Quality | 0/5 | Not started | - |

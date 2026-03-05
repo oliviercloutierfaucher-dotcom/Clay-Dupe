@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 
 from config.settings import ProviderName
 from data.models import (
+    CampaignStatus,
     Company,
     EnrichmentResult,
     EnrichmentType,
@@ -150,6 +151,34 @@ class WaterfallOrchestrator:
                     if cached.get("verification_status")
                     else VerificationStatus.UNKNOWN,
                 )
+
+        # --- 1b. Cross-campaign dedup — check if this contact was already
+        #         enriched in a different campaign. Reuses existing data
+        #         without consuming additional credits.
+        if first_name and last_name and domain:
+            try:
+                existing_person = await self.db.get_person_by_name_domain(
+                    first_name, last_name, domain,
+                )
+                if existing_person and existing_person.email:
+                    logger.debug(
+                        "Cross-campaign dedup hit: %s %s @ %s -> %s",
+                        first_name, last_name, domain, existing_person.email,
+                    )
+                    elapsed_ms = int((time.monotonic() - start_ts) * 1000)
+                    return self._build_result(
+                        enrichment_type=enrichment_type,
+                        provider_name=existing_person.source_provider or ProviderName.APOLLO,
+                        response_data={"email": existing_person.email, "source": "dedup"},
+                        found=True,
+                        query_input=cache_query,
+                        campaign_id=campaign_id,
+                        response_time_ms=elapsed_ms,
+                        from_cache=True,
+                        email=existing_person.email,
+                    )
+            except Exception:
+                logger.debug("Cross-campaign dedup check failed (non-critical)")
 
         # --- 2. Classify -------------------------------------------------
         signals = detect_fields(row)
@@ -351,6 +380,7 @@ class WaterfallOrchestrator:
         campaign_id: str,
         progress_callback: Optional[Callable[[int, int, EnrichmentResult], Any]] = None,
         chunk_size: int = _DEFAULT_CHUNK_SIZE,
+        campaign_row_ids: Optional[list[str]] = None,
     ) -> list[EnrichmentResult]:
         """Enrich a batch of rows with bounded concurrency.
 
@@ -368,6 +398,11 @@ class WaterfallOrchestrator:
             each row finishes.
         chunk_size:
             Number of rows per chunk (default 100).
+        campaign_row_ids:
+            Optional parallel list of campaign_row IDs for per-row
+            status tracking.  When provided, each row's status is
+            updated to ``processing`` before enrichment and to
+            ``complete`` or ``failed`` afterwards.
 
         Returns
         -------
@@ -379,11 +414,33 @@ class WaterfallOrchestrator:
         total = len(rows)
 
         for chunk_start in range(0, total, chunk_size):
-            chunk = rows[chunk_start : chunk_start + chunk_size]
+            # --- Pause check between chunks --------------------------------
+            try:
+                campaign = await self.db.get_campaign(campaign_id)
+                if campaign and campaign.status == CampaignStatus.PAUSED:
+                    logger.info("Campaign %s paused — stopping batch", campaign_id)
+                    break
+            except Exception:
+                logger.debug("Pause check failed (non-critical)")
 
-            async def _worker(indexed_row: tuple[int, dict]) -> EnrichmentResult:
+            chunk = rows[chunk_start : chunk_start + chunk_size]
+            chunk_row_ids = (
+                campaign_row_ids[chunk_start : chunk_start + chunk_size]
+                if campaign_row_ids
+                else None
+            )
+
+            async def _worker(indexed_row: tuple[int, dict, Optional[str]]) -> EnrichmentResult:
                 nonlocal completed
-                index, row = indexed_row
+                index, row, row_id = indexed_row
+
+                # Mark row as processing
+                if row_id:
+                    try:
+                        await self.db.update_campaign_row(row_id, "processing")
+                    except Exception:
+                        logger.debug("Failed to mark row %s as processing", row_id)
+
                 try:
                     result = await self.enrich_single(row, campaign_id=campaign_id)
                 except Exception:
@@ -395,6 +452,25 @@ class WaterfallOrchestrator:
                         ),
                         campaign_id=campaign_id,
                     )
+                    # Mark row as failed
+                    if row_id:
+                        try:
+                            await self.db.update_campaign_row(
+                                row_id, "failed", error="enrichment exception",
+                            )
+                        except Exception:
+                            pass
+                else:
+                    # Mark row as complete
+                    if row_id:
+                        status = "complete" if result.found else "complete"
+                        try:
+                            await self.db.update_campaign_row(
+                                row_id, status, person_id=result.person_id,
+                            )
+                        except Exception:
+                            pass
+
                 completed += 1
                 if progress_callback is not None:
                     try:
@@ -405,14 +481,80 @@ class WaterfallOrchestrator:
 
             chunk_results: list[EnrichmentResult] = await aiometer.run_all(
                 [
-                    functools.partial(_worker, (chunk_start + i, row))
+                    functools.partial(
+                        _worker,
+                        (
+                            chunk_start + i,
+                            row,
+                            chunk_row_ids[i] if chunk_row_ids else None,
+                        ),
+                    )
                     for i, row in enumerate(chunk)
                 ],
                 max_at_once=_DEFAULT_BATCH_CONCURRENCY,
             )
             all_results.extend(chunk_results)
 
+            # Update campaign progress checkpoint
+            try:
+                await self.db.update_campaign_status(
+                    campaign_id,
+                    CampaignStatus.RUNNING,
+                    enriched_rows=completed,
+                    last_processed_row=chunk_start + len(chunk),
+                )
+            except Exception:
+                logger.debug("Campaign progress update failed (non-critical)")
+
+            # WAL checkpoint between chunks to keep WAL file bounded.
+            try:
+                await self.db.wal_checkpoint()
+            except Exception:
+                logger.debug("WAL checkpoint skipped (non-critical)")
+
         return all_results
+
+    async def resume_batch(
+        self,
+        campaign_id: str,
+        progress_callback: Optional[Callable[[int, int, EnrichmentResult], Any]] = None,
+        chunk_size: int = _DEFAULT_CHUNK_SIZE,
+    ) -> list[EnrichmentResult]:
+        """Resume enrichment for a paused or crashed campaign.
+
+        Queries pending and failed rows from ``campaign_rows``, then
+        processes only those — already-completed rows are skipped.
+        """
+        pending_rows = await self.db.get_pending_rows(campaign_id, limit=100_000)
+        if not pending_rows:
+            # Also check for failed rows to retry
+            failed_rows = await self.db.get_failed_rows(campaign_id, limit=100_000)
+            pending_rows = failed_rows
+
+        if not pending_rows:
+            logger.info("No pending or failed rows for campaign %s", campaign_id)
+            return []
+
+        rows = []
+        row_ids = []
+        for pr in pending_rows:
+            input_data = pr.get("input_data", {})
+            if isinstance(input_data, str):
+                import json
+                try:
+                    input_data = json.loads(input_data)
+                except (json.JSONDecodeError, TypeError):
+                    input_data = {}
+            rows.append(input_data)
+            row_ids.append(pr["id"])
+
+        return await self.enrich_batch(
+            rows,
+            campaign_id=campaign_id,
+            progress_callback=progress_callback,
+            chunk_size=chunk_size,
+            campaign_row_ids=row_ids,
+        )
 
     # ------------------------------------------------------------------
     # Step execution
@@ -506,6 +648,7 @@ class WaterfallOrchestrator:
 
         # --- Dispatch to provider method ---------------------------------
         response: Optional[ProviderResponse] = None
+        step_start = time.monotonic()
         try:
             if action == "find_email":
                 response = await provider.find_email(first_name, last_name, domain)
@@ -574,6 +717,7 @@ class WaterfallOrchestrator:
                 return None
 
         except Exception as exc:
+            step_elapsed = int((time.monotonic() - step_start) * 1000)
             logger.exception(
                 "Provider %s action %s raised an error",
                 provider_name.value,
@@ -593,7 +737,28 @@ class WaterfallOrchestrator:
                     provider_name.value,
                     self._provider_concurrency[provider_name],
                 )
+
+            # Audit trail: log failed API call
+            try:
+                error_type = type(exc).__name__
+                await self.db.log_action(
+                    action="provider_call",
+                    entity_type="enrichment",
+                    details={
+                        "provider": provider_name.value,
+                        "action": action,
+                        "campaign_id": campaign_id,
+                        "status": "error",
+                        "error_type": error_type,
+                        "duration_ms": step_elapsed,
+                        "credits_consumed": 0,
+                    },
+                )
+            except Exception:
+                pass
             return None
+
+        step_elapsed = int((time.monotonic() - step_start) * 1000)
 
         # --- Post-call bookkeeping ---------------------------------------
         if response is not None:
@@ -611,6 +776,25 @@ class WaterfallOrchestrator:
 
             # NOTE: credit recording is deferred to save_enrichment_atomic()
             # so budget deduction and result save are atomic.
+
+            # Audit trail: log every provider API call
+            try:
+                await self.db.log_action(
+                    action="provider_call",
+                    entity_type="enrichment",
+                    details={
+                        "provider": provider_name.value,
+                        "action": action,
+                        "campaign_id": campaign_id,
+                        "status": "success" if response.found else "not_found",
+                        "email_found": bool(response.email),
+                        "credits_consumed": response.credits_used,
+                        "duration_ms": step_elapsed,
+                        "error_type": None,
+                    },
+                )
+            except Exception:
+                pass
 
         return response
 

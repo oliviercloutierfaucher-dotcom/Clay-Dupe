@@ -204,6 +204,44 @@ class Database:
             )
             return cursor.rowcount
 
+    async def cache_evict(self, max_rows: int = 50_000) -> int:
+        """Evict expired entries and enforce a row-count cap.
+
+        1. Delete all expired rows.
+        2. If the table still exceeds *max_rows*, delete the oldest
+           (by created_at) entries until the cap is met.
+
+        Returns total rows deleted.
+        """
+        total_deleted = 0
+        async with self._connect() as conn:
+            # 1. Purge expired
+            cursor = await conn.execute(
+                "DELETE FROM cache WHERE expires_at < CURRENT_TIMESTAMP"
+            )
+            total_deleted += cursor.rowcount
+
+            # 2. Enforce row-count cap
+            cursor = await conn.execute("SELECT COUNT(*) FROM cache")
+            count = (await cursor.fetchone())[0]
+            if count > max_rows:
+                excess = count - max_rows
+                await conn.execute(
+                    """DELETE FROM cache WHERE cache_key IN (
+                        SELECT cache_key FROM cache
+                        ORDER BY created_at ASC
+                        LIMIT ?
+                    )""",
+                    (excess,),
+                )
+                total_deleted += excess
+        return total_deleted
+
+    async def wal_checkpoint(self) -> None:
+        """Run a WAL checkpoint to keep the WAL file bounded."""
+        async with self._connect() as conn:
+            await conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
     # ------------------------------------------------------------------
     # Company Operations
     # ------------------------------------------------------------------
@@ -464,6 +502,22 @@ class Database:
                 return None
             return self._row_to_person(row)
 
+    async def get_person_by_name_domain(
+        self, first_name: str, last_name: str, domain: str,
+    ) -> Optional[Person]:
+        """Fetch a person by (first_name, last_name, company_domain)."""
+        async with self._connect() as conn:
+            cursor = await conn.execute(
+                """SELECT * FROM people
+                   WHERE lower(first_name) = ? AND lower(last_name) = ?
+                   AND lower(company_domain) = ?""",
+                (first_name.strip().lower(), last_name.strip().lower(), domain.strip().lower()),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                return None
+            return self._row_to_person(row)
+
     async def search_people(self, **filters) -> list[Person]:
         """Search people with dynamic filters.
 
@@ -656,6 +710,44 @@ class Database:
                 result.append(d)
             return result
 
+    async def get_failed_rows(self, campaign_id: str, limit: int = 100) -> list[dict]:
+        """Get failed rows for a campaign (for retry on resume)."""
+        async with self._connect() as conn:
+            cursor = await conn.execute(
+                """SELECT * FROM campaign_rows
+                   WHERE campaign_id = ? AND status = 'failed'
+                   ORDER BY row_number
+                   LIMIT ?""",
+                (campaign_id, limit),
+            )
+            rows = await cursor.fetchall()
+            result = []
+            for r in rows:
+                d = dict(r)
+                if isinstance(d.get("input_data"), str):
+                    try:
+                        d["input_data"] = json.loads(d["input_data"])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                result.append(d)
+            return result
+
+    async def get_campaign_row_stats(self, campaign_id: str) -> dict:
+        """Get per-status counts for a campaign's rows."""
+        async with self._connect() as conn:
+            cursor = await conn.execute(
+                """SELECT status, COUNT(*) as cnt
+                   FROM campaign_rows
+                   WHERE campaign_id = ?
+                   GROUP BY status""",
+                (campaign_id,),
+            )
+            rows = await cursor.fetchall()
+            stats = {"pending": 0, "processing": 0, "complete": 0, "failed": 0}
+            for r in rows:
+                stats[r["status"]] = r["cnt"]
+            return stats
+
     # ------------------------------------------------------------------
     # Enrichment Results
     # ------------------------------------------------------------------
@@ -705,13 +797,17 @@ class Database:
             # 1. Record credit usage
             await conn.execute(
                 """INSERT INTO credit_usage
-                   (id, provider, credits_used, found, lookup_date, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?)
-                   ON CONFLICT(provider, lookup_date) DO UPDATE SET
-                       credits_used = credits_used + excluded.credits_used,
-                       lookups = lookups + 1,
-                       found_count = found_count + CASE WHEN excluded.found THEN 1 ELSE 0 END""",
-                (usage_id, prov, credits, int(found), today, now),
+                   (id, provider, date, credits_used, api_calls_made,
+                    successful_lookups, failed_lookups, updated_at)
+                   VALUES (?, ?, ?, ?, 1, ?, ?, ?)
+                   ON CONFLICT(provider, date) DO UPDATE SET
+                       credits_used = credit_usage.credits_used + excluded.credits_used,
+                       api_calls_made = credit_usage.api_calls_made + 1,
+                       successful_lookups = credit_usage.successful_lookups + excluded.successful_lookups,
+                       failed_lookups = credit_usage.failed_lookups + excluded.failed_lookups,
+                       updated_at = excluded.updated_at""",
+                (usage_id, prov, today, credits,
+                 1 if found else 0, 0 if found else 1, now),
             )
 
             # 2. Save enrichment result
@@ -908,6 +1004,29 @@ class Database:
                         json.dumps([email]), now, now,
                     ),
                 )
+
+    async def deduplicate_patterns(self) -> int:
+        """Remove duplicate email patterns per domain.
+
+        Keeps the row with the highest sample_count for each
+        (domain, pattern) pair and deletes the rest.  Returns the
+        number of rows deleted.  The UNIQUE(domain, pattern) constraint
+        prevents future duplicates, but this cleans up any legacy data.
+        """
+        async with self._connect() as conn:
+            cursor = await conn.execute(
+                """DELETE FROM email_patterns
+                   WHERE id NOT IN (
+                       SELECT id FROM (
+                           SELECT id, ROW_NUMBER() OVER (
+                               PARTITION BY domain, pattern
+                               ORDER BY sample_count DESC, updated_at DESC
+                           ) AS rn
+                           FROM email_patterns
+                       ) WHERE rn = 1
+                   )"""
+            )
+            return cursor.rowcount
 
     # ------------------------------------------------------------------
     # Catch-All Cache
