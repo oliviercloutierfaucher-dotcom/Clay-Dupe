@@ -9,6 +9,7 @@ from providers.apollo import ApolloProvider
 from providers.findymail import FindymailProvider
 from providers.icypeas import IcypeasProvider
 from providers.contactout import ContactOutProvider
+from providers.datagma import DatagmaProvider
 from providers.base import _is_retryable
 
 
@@ -138,6 +139,19 @@ class TestRetryOnTransient500:
         mock_client.request.side_effect = [
             _make_500_response(),
             _make_ok_response({"work_email": ["a@b.com"], "personal_email": [], "profile": {}}),
+        ]
+        provider._client = mock_client
+        result = await provider.find_email("John", "Doe", "acme.com")
+        assert result.found is True
+        assert mock_client.request.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_datagma_retries_on_500(self):
+        provider = DatagmaProvider(api_key="test")
+        mock_client = AsyncMock()
+        mock_client.request.side_effect = [
+            _make_500_response(),
+            _make_ok_response({"data": {"email": "a@b.com", "emailStatus": "verified"}}),
         ]
         provider._client = mock_client
         result = await provider.find_email("John", "Doe", "acme.com")

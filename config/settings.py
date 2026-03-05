@@ -12,6 +12,7 @@ class ProviderName(str, Enum):
     FINDYMAIL = "findymail"
     ICYPEAS = "icypeas"
     CONTACTOUT = "contactout"
+    DATAGMA = "datagma"
 
 class ProviderConfig(BaseModel):
     name: ProviderName
@@ -83,7 +84,7 @@ def load_settings() -> Settings:
         providers[pname] = ProviderConfig(name=pname, api_key=api_key)
 
     # Parse waterfall order
-    order_str = os.getenv("WATERFALL_ORDER", "apollo,icypeas,findymail,contactout")
+    order_str = os.getenv("WATERFALL_ORDER", "apollo,icypeas,findymail,datagma")
     waterfall_order = [ProviderName(p.strip()) for p in order_str.split(",") if p.strip()]
 
     cache_ttl = int(os.getenv("CACHE_TTL_DAYS", "30"))

@@ -10,6 +10,7 @@ PROVIDER_RELIABILITY = {
     ProviderName.FINDYMAIL: 20,
     ProviderName.ICYPEAS: 14,
     ProviderName.CONTACTOUT: 15,
+    ProviderName.DATAGMA: 14,
 }
 
 # Verification status scores

@@ -11,6 +11,7 @@ from providers.apollo import ApolloProvider
 from providers.findymail import FindymailProvider
 from providers.icypeas import IcypeasProvider
 from providers.contactout import ContactOutProvider
+from providers.datagma import DatagmaProvider
 
 from data.sync import run_sync
 from ui.app import get_database, get_settings
@@ -26,6 +27,7 @@ _PROVIDER_CLASSES = {
     ProviderName.FINDYMAIL: FindymailProvider,
     ProviderName.ICYPEAS: IcypeasProvider,
     ProviderName.CONTACTOUT: ContactOutProvider,
+    ProviderName.DATAGMA: DatagmaProvider,
 }
 
 

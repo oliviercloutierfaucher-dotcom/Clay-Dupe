@@ -11,6 +11,7 @@ from providers.apollo import ApolloProvider
 from providers.findymail import FindymailProvider
 from providers.icypeas import IcypeasProvider
 from providers.contactout import ContactOutProvider
+from providers.datagma import DatagmaProvider
 
 
 # ---------------------------------------------------------------------------
@@ -250,3 +251,71 @@ class TestContactOutProvider:
         """CRITICAL: ContactOut uses 'token: <key>' header, NOT Authorization."""
         assert provider.api_key == "test_token_key"
         # The provider should set headers with "token" key
+
+
+# ---------------------------------------------------------------------------
+# Datagma tests
+# ---------------------------------------------------------------------------
+
+class TestDatagmaProvider:
+    """Tests for Datagma provider."""
+
+    @pytest.fixture
+    def provider(self):
+        return DatagmaProvider(api_key="test_api_id")
+
+    @pytest.mark.asyncio
+    async def test_find_email_found(self, provider):
+        """Mock a successful findEmail response."""
+        mock_data = {
+            "data": {
+                "email": "john@acme.com",
+                "emailStatus": "verified",
+            }
+        }
+        mock_client = AsyncMock()
+        mock_response = MagicMock()
+        mock_response.json.return_value = mock_data
+        mock_response.status_code = 200
+        mock_response.raise_for_status = MagicMock()
+        mock_client.request.return_value = mock_response
+        provider._client = mock_client
+
+        result = await provider.find_email("John", "Doe", "acme.com")
+        assert result.found is True
+        assert result.email == "john@acme.com"
+        assert result.confidence == "verified"
+        assert result.credits_used == 1.0
+
+    @pytest.mark.asyncio
+    async def test_find_email_not_found(self, provider):
+        """Mock a response with no email found."""
+        mock_data = {"data": {"email": None}}
+        mock_client = AsyncMock()
+        mock_response = MagicMock()
+        mock_response.json.return_value = mock_data
+        mock_response.status_code = 200
+        mock_response.raise_for_status = MagicMock()
+        mock_client.request.return_value = mock_response
+        provider._client = mock_client
+
+        result = await provider.find_email("Nobody", "Here", "unknown.com")
+        assert result.found is False
+
+    @pytest.mark.asyncio
+    async def test_find_email_auth_error(self, provider):
+        """Mock a 401 response."""
+        mock_client = AsyncMock()
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "unauthorized",
+            request=httpx.Request("GET", "https://gateway.datagma.net/api/ingress/v6/findEmail"),
+            response=httpx.Response(401, request=httpx.Request("GET", "https://gateway.datagma.net/api/ingress/v6/findEmail")),
+        )
+        mock_client.request.return_value = mock_response
+        provider._client = mock_client
+
+        result = await provider.find_email("John", "Doe", "acme.com")
+        assert result.found is False
+        assert "invalid API key" in (result.error or "") or "auth" in (result.error or "").lower() or result.error is not None

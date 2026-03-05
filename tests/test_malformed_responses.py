@@ -14,6 +14,7 @@ from providers.apollo import ApolloProvider
 from providers.findymail import FindymailProvider
 from providers.icypeas import IcypeasProvider
 from providers.contactout import ContactOutProvider
+from providers.datagma import DatagmaProvider
 from providers.base import ProviderResponse
 
 
@@ -239,3 +240,47 @@ class TestContactOutMalformedResponses:
         )
         assert resp.found is True
         assert resp.email == "j@acme.com"
+
+
+# ---------------------------------------------------------------------------
+# Datagma — malformed find_email responses
+# ---------------------------------------------------------------------------
+
+class TestDatagmaMalformedResponses:
+    @pytest.mark.asyncio
+    async def test_empty_response(self):
+        """Completely empty dict → found=False."""
+        prov = _provider_with_mock(
+            DatagmaProvider, _mock_request_returning({})
+        )
+        resp = await prov.find_email("John", "Doe", "acme.com")
+        assert isinstance(resp, ProviderResponse)
+        assert resp.found is False
+
+    @pytest.mark.asyncio
+    async def test_missing_data_key(self):
+        """Response with no 'data' key → found=False."""
+        prov = _provider_with_mock(
+            DatagmaProvider, _mock_request_returning({"unrelated": "stuff"})
+        )
+        resp = await prov.find_email("John", "Doe", "acme.com")
+        assert isinstance(resp, ProviderResponse)
+        assert resp.found is False
+
+    @pytest.mark.asyncio
+    async def test_data_missing_email_field(self):
+        """data dict exists but has no email field → found=False."""
+        prov = _provider_with_mock(
+            DatagmaProvider, _mock_request_returning({"data": {"id": "123"}})
+        )
+        resp = await prov.find_email("John", "Doe", "acme.com")
+        assert resp.found is False
+
+    @pytest.mark.asyncio
+    async def test_wrong_data_type(self):
+        """data is a string instead of dict → found=False."""
+        prov = _provider_with_mock(
+            DatagmaProvider, _mock_request_returning({"data": "not-a-dict"})
+        )
+        resp = await prov.find_email("John", "Doe", "acme.com")
+        assert resp.found is False

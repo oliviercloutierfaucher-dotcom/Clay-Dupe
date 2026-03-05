@@ -43,6 +43,7 @@ from providers.apollo import ApolloProvider
 from providers.findymail import FindymailProvider
 from providers.icypeas import IcypeasProvider
 from providers.contactout import ContactOutProvider
+from providers.datagma import DatagmaProvider
 from providers.base import BaseProvider
 
 # Allow asyncio.run() inside Typer callbacks (which may already have a loop)
@@ -87,6 +88,7 @@ PROVIDER_CLASSES: dict[ProviderName, type[BaseProvider]] = {
     ProviderName.FINDYMAIL: FindymailProvider,
     ProviderName.ICYPEAS: IcypeasProvider,
     ProviderName.CONTACTOUT: ContactOutProvider,
+    ProviderName.DATAGMA: DatagmaProvider,
 }
 
 

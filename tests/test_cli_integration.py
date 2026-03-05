@@ -99,7 +99,7 @@ class TestStatsCommand:
                     return dashboard
                 elif call_count[0] == 2:
                     return {}
-                elif call_count[0] <= 6:
+                elif call_count[0] <= 7:
                     return budget_balance
                 else:
                     return cache_stats
