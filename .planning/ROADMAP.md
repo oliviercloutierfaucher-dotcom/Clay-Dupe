@@ -20,7 +20,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 6: Cache & Database Performance** - Add cache table indexes, automatic cache eviction, and WAL checkpoint management
 - [x] **Phase 7: Campaign State Management** - Add checkpoint-per-row progress tracking, pause flag, and resume from last checkpoint
 - [x] **Phase 8: New Capabilities** - Deliver cross-campaign deduplication, full audit trail, provider A/B testing, and pattern deduplication
-- [ ] **Phase 9: Testing & Quality** - Close coverage gaps: standardized retry logic, CLI integration tests, waterfall edge cases, malformed response handling, concurrent DB access
+- [x] **Phase 9: Testing & Quality** - Close coverage gaps: standardized retry logic, CLI integration tests, waterfall edge cases, malformed response handling, concurrent DB access
 
 ## Phase Details
 
@@ -164,11 +164,11 @@ Plans:
 **Plans**: TBD
 
 Plans:
-- [ ] 09-01: Standardize retry logic across all 4 providers using tenacity with exponential backoff
-- [ ] 09-02: Write integration tests for CLI commands (enrich, search, verify, stats)
-- [ ] 09-03: Write tests for waterfall edge cases (all providers fail, mid-cascade timeout, budget exhaustion mid-batch)
-- [ ] 09-04: Write tests for malformed API response handling across all 4 providers
-- [ ] 09-05: Write tests for concurrent database access under batch enrichment load
+- [x] 09-01: Standardize retry logic across all 4 providers using tenacity with exponential backoff
+- [x] 09-02: Write integration tests for CLI commands (enrich, search, verify, stats)
+- [x] 09-03: Write tests for waterfall edge cases (all providers fail, mid-cascade timeout, budget exhaustion mid-batch)
+- [x] 09-04: Write tests for malformed API response handling across all 4 providers
+- [x] 09-05: Write tests for concurrent database access under batch enrichment load
 
 ## Progress
 
@@ -185,4 +185,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 6. Cache & Database Performance | 3/3 | Complete | 2026-03-04 |
 | 7. Campaign State Management | 3/3 | Complete | 2026-03-04 |
 | 8. New Capabilities | 4/4 | Complete | 2026-03-04 |
-| 9. Testing & Quality | 0/5 | Not started | - |
+| 9. Testing & Quality | 5/5 | Complete | 2026-03-04 |

@@ -7,12 +7,30 @@ from dataclasses import dataclass, field
 from typing import Optional, Any
 import time
 import httpx
+from tenacity import (
+    retry,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_exponential,
+    before_sleep_log,
+)
 
 from config.settings import ProviderName
 from data.models import Company, Person
 from providers.http_pool import get_shared_client
 
 logger = logging.getLogger(__name__)
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    """Return True for transient errors that should be retried."""
+    if isinstance(exc, httpx.TimeoutException):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in (429, 500, 502, 503, 504)
+    if isinstance(exc, OSError):
+        return True
+    return False
 
 
 @dataclass
@@ -44,9 +62,20 @@ class BaseProvider(ABC):
             self._client = get_shared_client()
         return self._client
 
+    @retry(
+        retry=retry_if_exception(_is_retryable),
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
+        reraise=True,
+    )
     async def _request(self, method: str, url: str, **kwargs) -> tuple[dict, int]:
         """Make an HTTP request and return (response_json, elapsed_ms).
-        Subclasses should use this for all API calls."""
+
+        Retries up to 3 times with exponential backoff on transient
+        errors (429, 5xx, timeouts, connection errors).
+        Non-retryable errors (401, 403, 422) propagate immediately.
+        """
         client = await self._get_client()
         start = time.monotonic()
         response = await client.request(method, url, **kwargs)
