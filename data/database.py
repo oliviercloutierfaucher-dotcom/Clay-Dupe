@@ -336,7 +336,7 @@ class Database:
             params.append(filters["ebitda_max"])
 
         where = " AND ".join(clauses) if clauses else "1=1"
-        sql = f"SELECT * FROM companies WHERE {where} ORDER BY name"
+        sql = "SELECT * FROM companies WHERE " + where + " ORDER BY name"
 
         async with self._connect() as conn:
             cursor = await conn.execute(sql, params)
@@ -494,7 +494,7 @@ class Database:
             params.append(filters["country"])
 
         where = " AND ".join(clauses) if clauses else "1=1"
-        sql = f"SELECT * FROM people WHERE {where} ORDER BY full_name"
+        sql = "SELECT * FROM people WHERE " + where + " ORDER BY full_name"
 
         async with self._connect() as conn:
             cursor = await conn.execute(sql, params)
@@ -558,23 +558,26 @@ class Database:
             sets.append("completed_at = ?")
             params.append(now)
 
-        # Handle arbitrary extra fields
-        allowed_fields = {
-            "enriched_rows", "found_rows", "failed_rows", "skipped_rows",
-            "total_credits_used", "estimated_cost_usd", "last_processed_row",
-            "total_rows", "cost_by_provider",
+        # Handle arbitrary extra fields — whitelist maps Python names to SQL columns
+        _ALLOWED_COLUMNS = {
+            "enriched_rows": "enriched_rows = ?",
+            "found_rows": "found_rows = ?",
+            "failed_rows": "failed_rows = ?",
+            "skipped_rows": "skipped_rows = ?",
+            "total_credits_used": "total_credits_used = ?",
+            "estimated_cost_usd": "estimated_cost_usd = ?",
+            "last_processed_row": "last_processed_row = ?",
+            "total_rows": "total_rows = ?",
+            "cost_by_provider": "cost_by_provider = ?",
         }
         for key, value in kwargs.items():
-            if key in allowed_fields:
-                if key == "cost_by_provider":
-                    sets.append(f"{key} = ?")
-                    params.append(json.dumps(value))
-                else:
-                    sets.append(f"{key} = ?")
-                    params.append(value)
+            col_clause = _ALLOWED_COLUMNS.get(key)
+            if col_clause is not None:
+                sets.append(col_clause)
+                params.append(json.dumps(value) if key == "cost_by_provider" else value)
 
         params.append(campaign_id)
-        sql = f"UPDATE campaigns SET {', '.join(sets)} WHERE id = ?"
+        sql = "UPDATE campaigns SET " + ", ".join(sets) + " WHERE id = ?"
 
         async with self._connect() as conn:
             await conn.execute(sql, params)
@@ -708,7 +711,7 @@ class Database:
             params.append(int(filters["found"]))
 
         where = " AND ".join(clauses) if clauses else "1=1"
-        sql = f"SELECT * FROM enrichment_results WHERE {where} ORDER BY found_at DESC"
+        sql = "SELECT * FROM enrichment_results WHERE " + where + " ORDER BY found_at DESC"
 
         async with self._connect() as conn:
             cursor = await conn.execute(sql, params)

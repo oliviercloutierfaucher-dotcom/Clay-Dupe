@@ -8,6 +8,7 @@ from typing import Optional
 import httpx
 
 from providers.base import BaseProvider, ProviderResponse
+from providers.validators import validate_domain, validate_email, validate_name
 from config.settings import ProviderName
 from data.models import Company, Person
 
@@ -52,6 +53,9 @@ class IcypeasProvider(BaseProvider):
         self, first_name: str, last_name: str, domain: str
     ) -> ProviderResponse:
         """POST /api/sync/email-search — find email by name + domain."""
+        first_name = validate_name("Icypeas", first_name, "first_name")
+        last_name = validate_name("Icypeas", last_name, "last_name")
+        domain = validate_domain("Icypeas", domain)
         url = f"{self.base_url}/sync/email-search"
         payload = {
             "firstname": first_name,
@@ -114,6 +118,7 @@ class IcypeasProvider(BaseProvider):
     # ------------------------------------------------------------------
     async def verify_email(self, email: str) -> ProviderResponse:
         """POST /api/sync/email-verification — verify a single email."""
+        email = validate_email("Icypeas", email)
         url = f"{self.base_url}/sync/email-verification"
         payload = {"email": email}
 

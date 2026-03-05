@@ -10,6 +10,7 @@ import httpx
 from config.settings import ProviderName
 from data.models import Company, Person
 from providers.base import BaseProvider, ProviderResponse
+from providers.validators import validate_domain, validate_name
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +78,9 @@ class ApolloProvider(BaseProvider):
 
         Costs 1 credit on a match, 0 on no match.
         """
+        first_name = validate_name("Apollo", first_name, "first_name")
+        last_name = validate_name("Apollo", last_name, "last_name")
+        domain = validate_domain("Apollo", domain)
         payload = {
             "first_name": first_name,
             "last_name": last_name,
@@ -264,6 +268,7 @@ class ApolloProvider(BaseProvider):
 
         Costs 1 credit.
         """
+        domain = validate_domain("Apollo", domain)
         try:
             data, elapsed = await self._get("/organizations/enrich", params={"domain": domain})
         except httpx.HTTPStatusError as exc:

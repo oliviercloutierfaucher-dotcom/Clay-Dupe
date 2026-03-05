@@ -11,6 +11,7 @@ import httpx
 from config.settings import ProviderName
 from data.models import Company, Person
 from providers.base import BaseProvider, ProviderResponse
+from providers.validators import validate_domain, validate_linkedin_url, validate_name
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +117,9 @@ class ContactOutProvider(BaseProvider):
         if self._is_linkedin_url(domain):
             return await self.find_email_by_linkedin(domain)
 
+        first_name = validate_name("ContactOut", first_name, "first_name")
+        last_name = validate_name("ContactOut", last_name, "last_name")
+        domain = validate_domain("ContactOut", domain)
         # Fall back to name + company enrichment
         payload = {
             "first_name": first_name,
@@ -145,6 +149,7 @@ class ContactOutProvider(BaseProvider):
         The ``include`` parameter is **required** -- without it no emails
         are returned by the API.
         """
+        linkedin_url = validate_linkedin_url("ContactOut", linkedin_url)
         params = {
             "profile": linkedin_url,
             "include": "work_email,personal_email",
@@ -232,6 +237,7 @@ class ContactOutProvider(BaseProvider):
 
     async def enrich_company(self, domain: str) -> ProviderResponse:
         """Enrich a company via GET /v1/domain/enrich?domain=<domain>."""
+        domain = validate_domain("ContactOut", domain)
         try:
             data, elapsed = await self._get(
                 "/v1/domain/enrich", params={"domain": domain},

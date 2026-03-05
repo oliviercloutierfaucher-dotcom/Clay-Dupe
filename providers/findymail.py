@@ -7,6 +7,7 @@ from typing import Optional
 import httpx
 
 from providers.base import BaseProvider, ProviderResponse
+from providers.validators import validate_domain, validate_email, validate_name
 from config.settings import ProviderName
 from data.models import Company, Person
 
@@ -37,6 +38,9 @@ class FindymailProvider(BaseProvider):
         self, first_name: str, last_name: str, domain: str
     ) -> ProviderResponse:
         """POST /api/search/name — find email by full name + domain."""
+        first_name = validate_name("Findymail", first_name, "first_name")
+        last_name = validate_name("Findymail", last_name, "last_name")
+        domain = validate_domain("Findymail", domain)
         url = f"{self.base_url}/search/name"
         payload = {
             "name": f"{first_name} {last_name}",
@@ -91,6 +95,7 @@ class FindymailProvider(BaseProvider):
     # ------------------------------------------------------------------
     async def verify_email(self, email: str) -> ProviderResponse:
         """POST /api/verify — verify a single email address."""
+        email = validate_email("Findymail", email)
         url = f"{self.base_url}/verify"
         payload = {"email": email}
 
