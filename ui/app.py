@@ -9,6 +9,7 @@ import streamlit as st
 
 from config.settings import load_settings, Settings, ProviderName
 from data.database import Database
+from ui.styles import inject_clay_theme
 
 
 # ---------------------------------------------------------------------------
@@ -39,6 +40,8 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+inject_clay_theme()
+
 # ---------------------------------------------------------------------------
 # Startup provider validation
 # ---------------------------------------------------------------------------
@@ -65,22 +68,22 @@ else:
 # Navigation
 # ---------------------------------------------------------------------------
 
-enrichment_pages = [
-    st.Page("pages/dashboard.py", title="Dashboard", icon=":material/dashboard:", default=True),
-    st.Page("pages/search.py", title="Search", icon=":material/search:"),
-    st.Page("pages/enrich.py", title="Enrich", icon=":material/bolt:"),
-    st.Page("pages/results.py", title="Results", icon=":material/table_chart:"),
+data_pages = [
+    st.Page("pages/dashboard.py", title="Overview", icon=":material/dashboard:"),
+    st.Page("pages/search.py", title="Find Leads", icon=":material/search:"),
+    st.Page("pages/results.py", title="Data Table", icon=":material/table_chart:", default=True),
 ]
 
-analytics_config_pages = [
+tools_pages = [
+    st.Page("pages/enrich.py", title="Enrich", icon=":material/bolt:"),
     st.Page("pages/analytics.py", title="Analytics", icon=":material/bar_chart:"),
     st.Page("pages/settings.py", title="Settings", icon=":material/settings:"),
 ]
 
 pg = st.navigation(
     {
-        "Enrichment": enrichment_pages,
-        "Analytics & Config": analytics_config_pages,
+        "Data": data_pages,
+        "Tools": tools_pages,
     }
 )
 
@@ -92,6 +95,19 @@ with st.sidebar:
     st.markdown("### Clay-Dupe")
     st.caption("Open-source enrichment platform")
     st.divider()
+
+# ---------------------------------------------------------------------------
+# Persistent top toolbar
+# ---------------------------------------------------------------------------
+
+_toolbar_left, _toolbar_credits, _toolbar_action = st.columns([6, 2, 2])
+
+with _toolbar_credits:
+    st.caption("Credits remaining: --")
+
+with _toolbar_action:
+    if st.button("Enrich Data", type="primary", icon=":material/bolt:", use_container_width=True):
+        st.switch_page("pages/enrich.py")
 
 # ---------------------------------------------------------------------------
 # Run the selected page
