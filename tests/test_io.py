@@ -13,40 +13,45 @@ from data.io import ColumnMapper, read_input_file, apply_mapping
 class TestColumnMapper:
     def test_exact_match(self):
         mapper = ColumnMapper(["first_name", "last_name", "email"])
-        mapping = mapper.get_mapping_summary()
-        assert mapping["first_name"] == "first_name"
-        assert mapping["last_name"] == "last_name"
-        assert mapping["email"] == "email"
+        summary = mapper.get_mapping_summary()
+        mapped = summary["mapped"]
+        assert mapped["first_name"] == "first_name"
+        assert mapped["last_name"] == "last_name"
+        assert mapped["email"] == "email"
 
     def test_alias_match(self):
         mapper = ColumnMapper(["First Name", "Last Name", "Email Address"])
-        mapping = mapper.get_mapping_summary()
-        assert mapping.get("First Name") == "first_name" or "first_name" in mapping.values()
+        summary = mapper.get_mapping_summary()
+        mapped = summary["mapped"]
+        assert mapped.get("First Name") == "first_name" or "first_name" in mapped.values()
 
     def test_fuzzy_match_linkedin(self):
         """'LI Profile' should fuzzy-match to linkedin_url."""
         mapper = ColumnMapper(["LI Profile", "Company"])
-        mapping = mapper.get_mapping_summary()
-        # Check that LI Profile maps to linkedin_url
-        li_mapping = mapping.get("LI Profile")
+        summary = mapper.get_mapping_summary()
+        mapped = summary["mapped"]
+        li_mapping = mapped.get("LI Profile")
         assert li_mapping == "linkedin_url" or li_mapping is not None
 
     def test_company_mapping(self):
         mapper = ColumnMapper(["Company", "Domain", "Name"])
-        mapping = mapper.get_mapping_summary()
-        assert "company_name" in mapping.values() or "Company" in mapping
+        summary = mapper.get_mapping_summary()
+        mapped = summary["mapped"]
+        assert "company_name" in mapped.values() or "Company" in mapped
 
     def test_set_mapping_override(self):
         mapper = ColumnMapper(["Custom Col"])
         mapper.set_mapping("Custom Col", "first_name")
-        mapping = mapper.get_mapping_summary()
-        assert mapping.get("Custom Col") == "first_name"
+        summary = mapper.get_mapping_summary()
+        mapped = summary["mapped"]
+        assert mapped.get("Custom Col") == "first_name"
 
     def test_set_mapping_to_none(self):
         mapper = ColumnMapper(["first_name"])
         mapper.set_mapping("first_name", None)
-        mapping = mapper.get_mapping_summary()
-        assert mapping.get("first_name") is None
+        summary = mapper.get_mapping_summary()
+        # set_mapping(col, None) removes from mapped, puts in unmapped
+        assert "first_name" not in summary["mapped"]
 
 
 class TestReadInputFile:
@@ -65,7 +70,7 @@ class TestReadInputFile:
 
     def test_empty_rows_dropped(self, tmp_path):
         csv_file = tmp_path / "test.csv"
-        csv_file.write_text("first_name,last_name\nJohn,Doe\n,,\n,,\nJane,Smith\n")
+        csv_file.write_text("first_name,last_name\nJohn,Doe\n,\n,\nJane,Smith\n")
         df = read_input_file(str(csv_file))
         assert len(df) == 2
 

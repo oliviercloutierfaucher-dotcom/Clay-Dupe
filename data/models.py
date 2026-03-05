@@ -212,7 +212,7 @@ class EnrichmentResult(BaseModel):
     source_provider: ProviderName
     result_data: dict = Field(default_factory=dict)
     found: bool = False
-    confidence_score: Optional[float] = Field(default=None, ge=0, le=100)
+    confidence_score: float = Field(default=0.0, ge=0, le=100)
     verification_status: VerificationStatus = VerificationStatus.UNKNOWN
     cost_credits: float = 0.0
     cost_usd: Optional[float] = None
