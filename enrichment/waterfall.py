@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from data.database import Database
     from enrichment.pattern_engine import PatternEngine
     from providers.base import BaseProvider
+    from quality.verification import EmailVerifier
 
 from config.settings import ProviderName
 from data.models import (
@@ -70,6 +71,7 @@ class WaterfallOrchestrator:
         rate_limiters: dict[ProviderName, Any],
         cost_tracker: Optional[Any] = None,
         waterfall_order: Optional[list[ProviderName]] = None,
+        verifier: Optional[EmailVerifier] = None,
     ) -> None:
         self.db = db
         self.providers = providers
@@ -78,6 +80,7 @@ class WaterfallOrchestrator:
         self.circuit_breakers = circuit_breakers
         self.rate_limiters = rate_limiters
         self.cost_tracker = cost_tracker
+        self.verifier = verifier
         # Explicit waterfall order from settings (if provided)
         self._configured_order = waterfall_order
         # Adaptive order computed at first batch run
@@ -634,6 +637,23 @@ class WaterfallOrchestrator:
                 )
             return ProviderResponse(found=False, credits_used=0.0)
 
+        # --- Local email verification (no provider needed) ---------------
+        if action == "verify_email_local":
+            email = row.get("email", "")
+            if not email or self.verifier is None:
+                return None
+            try:
+                result = await self.verifier.verify(email)
+                return ProviderResponse(
+                    found=result.get("valid", False),
+                    email=email,
+                    data=result,
+                    credits_used=0.0,
+                )
+            except Exception:
+                logger.exception("Local email verification error for %s", email)
+                return None
+
         # --- Provider-based steps ----------------------------------------
         if provider_name is None:
             logger.warning("Step %s has no provider, skipping", action)
@@ -963,15 +983,28 @@ class WaterfallOrchestrator:
         person_id: Optional[str] = None
 
         try:
+            # Extract person-level data from provider response
+            response_data = response.data or {}
+            people_data: dict = {}
+            if isinstance(response_data.get("people"), list) and response_data["people"]:
+                people_data = response_data["people"][0]
+
             person = Person(
                 first_name=row.get("first_name"),
                 last_name=row.get("last_name"),
                 full_name=row.get("full_name"),
-                title=row.get("title"),
-                company_name=row.get("company_name"),
+                title=row.get("title") or people_data.get("title") or response_data.get("title"),
+                seniority=people_data.get("seniority") or response_data.get("seniority"),
+                department=people_data.get("department") or response_data.get("department"),
+                company_name=row.get("company_name") or people_data.get("company_name"),
                 company_domain=row.get("company_domain"),
                 email=response.email,
-                linkedin_url=response.linkedin_url or row.get("linkedin_url"),
+                phone=response.phone or people_data.get("phone") or response_data.get("phone"),
+                mobile_phone=people_data.get("mobile_phone") or response_data.get("mobile_phone"),
+                linkedin_url=response.linkedin_url or row.get("linkedin_url") or people_data.get("linkedin_url"),
+                city=people_data.get("city") or response_data.get("city"),
+                state=people_data.get("state") or response_data.get("state"),
+                country=people_data.get("country") or response_data.get("country"),
                 source_provider=provider_name,
                 enriched_at=now,
             )

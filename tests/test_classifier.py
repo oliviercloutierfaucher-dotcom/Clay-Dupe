@@ -82,14 +82,14 @@ class TestClassifyRow:
         signals = detect_fields({"email": "john@acme.com"})
         assert classify_row(signals) == RouteCategory.EMAIL_ONLY
 
-    def test_email_takes_priority_over_name_domain(self):
-        """Even with name+domain, if email exists, classify as EMAIL_ONLY."""
+    def test_name_domain_takes_priority_over_email(self):
+        """With name+domain+email, classify as NAME_AND_DOMAIN for full enrichment."""
         signals = detect_fields({
             "email": "john@acme.com",
             "first_name": "John",
             "company_domain": "acme.com",
         })
-        assert classify_row(signals) == RouteCategory.EMAIL_ONLY
+        assert classify_row(signals) == RouteCategory.NAME_AND_DOMAIN
 
     def test_linkedin_person(self):
         signals = detect_fields({"linkedin_url": "https://linkedin.com/in/johndoe"})

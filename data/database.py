@@ -38,6 +38,7 @@ if sys.version_info < (3, 11):
 class Database:
     def __init__(self, db_path: str = "clay_dupe.db"):
         self.db_path = db_path
+        self._conn: Optional[aiosqlite.Connection] = None
         self._init_db()
 
     def _init_db(self):
@@ -52,22 +53,32 @@ class Database:
         finally:
             conn.close()
 
+    async def _get_connection(self) -> aiosqlite.Connection:
+        """Return the singleton connection, opening it lazily on first use."""
+        if self._conn is None:
+            self._conn = await aiosqlite.connect(self.db_path)
+            self._conn.row_factory = aiosqlite.Row
+            await self._conn.execute("PRAGMA journal_mode=WAL")
+            await self._conn.execute("PRAGMA foreign_keys=ON")
+            await self._conn.execute("PRAGMA busy_timeout=5000")
+        return self._conn
+
     @asynccontextmanager
     async def _connect(self):
-        """Async context manager for DB connections. WAL mode, FK ON, busy_timeout=5000."""
-        conn = await aiosqlite.connect(self.db_path)
-        conn.row_factory = aiosqlite.Row
-        await conn.execute("PRAGMA journal_mode=WAL")
-        await conn.execute("PRAGMA foreign_keys=ON")
-        await conn.execute("PRAGMA busy_timeout=5000")
+        """Async context manager reusing a singleton DB connection. WAL mode, FK ON, busy_timeout=5000."""
+        conn = await self._get_connection()
         try:
             yield conn
             await conn.commit()
         except Exception:
             await conn.rollback()
             raise
-        finally:
-            await conn.close()
+
+    async def close(self):
+        """Close the singleton connection for clean shutdown."""
+        if self._conn is not None:
+            await self._conn.close()
+            self._conn = None
 
     # ------------------------------------------------------------------
     # Helpers: Row -> Model conversion

@@ -97,16 +97,17 @@ def classify_row(signals: int) -> RouteCategory:
     """Map field signals to a RouteCategory.
 
     Priority order (first match wins):
-    1. Has EMAIL -> EMAIL_ONLY (already have email, just verify)
-    2. Has LINKEDIN -> LINKEDIN_PERSON
-    3. Has (FIRST_NAME or FULL_NAME) and DOMAIN -> NAME_AND_DOMAIN
-    4. Has (FIRST_NAME or FULL_NAME) and COMPANY_NAME (no domain) -> NAME_AND_COMPANY
+    1. Has (FIRST_NAME or FULL_NAME) and DOMAIN -> NAME_AND_DOMAIN (full enrichment)
+    2. Has (FIRST_NAME or FULL_NAME) and COMPANY_NAME -> NAME_AND_COMPANY
+    3. Has LINKEDIN -> LINKEDIN_PERSON
+    4. Has EMAIL (without name+domain) -> EMAIL_ONLY (verify only)
     5. Has COMPANY_NAME or DOMAIN (no person name) -> COMPANY_ONLY or DOMAIN_ONLY
     6. Has FIRST_NAME or FULL_NAME (no company info) -> NAME_ONLY
     7. Otherwise -> UNROUTABLE
 
     Note: If we have a full_name but no first/last, that counts as having a name.
-    If we have both email AND name+domain, still classify as EMAIL_ONLY (verify-only).
+    Rows with email + name + domain get NAME_AND_DOMAIN for full enrichment;
+    the existing email can be verified as a bonus within that route.
     """
     has_email = bool(signals & FieldSignal.EMAIL)
     has_linkedin = bool(signals & FieldSignal.LINKEDIN)
@@ -114,21 +115,21 @@ def classify_row(signals: int) -> RouteCategory:
     has_domain = bool(signals & FieldSignal.DOMAIN)
     has_company = bool(signals & FieldSignal.COMPANY_NAME)
 
-    # 1. EMAIL_ONLY
-    if has_email:
-        return RouteCategory.EMAIL_ONLY
-
-    # 2. LINKEDIN_PERSON
-    if has_linkedin:
-        return RouteCategory.LINKEDIN_PERSON
-
-    # 3. NAME_AND_DOMAIN
+    # 1. NAME_AND_DOMAIN (even if email exists — full enrichment)
     if has_name and has_domain:
         return RouteCategory.NAME_AND_DOMAIN
 
-    # 4. NAME_AND_COMPANY (has name + company but no domain)
+    # 2. NAME_AND_COMPANY (has name + company but no domain)
     if has_name and has_company:
         return RouteCategory.NAME_AND_COMPANY
+
+    # 3. LINKEDIN_PERSON
+    if has_linkedin:
+        return RouteCategory.LINKEDIN_PERSON
+
+    # 4. EMAIL_ONLY (only has email, no name+domain for full enrichment)
+    if has_email:
+        return RouteCategory.EMAIL_ONLY
 
     # 5. COMPANY_ONLY or DOMAIN_ONLY (no person name)
     if has_company:

@@ -61,6 +61,8 @@ class TestConcurrentInserts:
 
             assert count == 100
 
+            await db.close()
+
     @pytest.mark.asyncio
     async def test_parallel_cache_writes_no_corruption(self):
         """Two coroutines writing different cache entries — no corruption."""
@@ -88,6 +90,8 @@ class TestConcurrentInserts:
                 count = (await cursor.fetchone())[0]
 
             assert count == 60
+
+            await db.close()
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +132,8 @@ class TestConcurrentReadsWrites:
 
             assert len(read_results) == 10
             assert all(r is not None for r in read_results)
+
+            await db.close()
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +180,8 @@ class TestConcurrentBudgetOps:
             assert row[0] == 50.0  # credits_used
             assert row[1] == 50    # api_calls_made
 
+            await db.close()
+
 
 # ---------------------------------------------------------------------------
 # Test: WAL checkpoint during concurrent access
@@ -209,3 +217,5 @@ class TestWALConcurrent:
                 count = (await cursor.fetchone())[0]
 
             assert count == 30
+
+            await db.close()

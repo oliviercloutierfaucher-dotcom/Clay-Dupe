@@ -283,6 +283,7 @@ def enrich(
             rate_limiters=rate_limiters,
             cost_tracker=cost_tracker,
             waterfall_order=settings.waterfall_order,
+            verifier=verifier,
         )
 
         total = len(records)

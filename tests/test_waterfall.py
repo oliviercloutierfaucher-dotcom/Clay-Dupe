@@ -35,7 +35,9 @@ class TestGetProviderSequence:
     def test_email_only_verify(self):
         order = [ProviderName.APOLLO]
         steps = get_provider_sequence(RouteCategory.EMAIL_ONLY, order)
-        assert steps[0]["action"] == "verify_email"
+        # First step is free local verification, then paid external
+        assert steps[0]["action"] == "verify_email_local"
+        assert steps[0]["is_free"] is True
 
     def test_domain_only_enrich(self):
         order = [ProviderName.APOLLO]
