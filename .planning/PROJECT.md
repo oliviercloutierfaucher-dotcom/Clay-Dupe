@@ -41,24 +41,24 @@ Reliably find verified contact emails for target companies by cascading through 
 
 ### Active
 
-<!-- Current scope. Building toward these across hardening, performance, capabilities, and scaling. -->
+<!-- Current scope — all items shipped in Hardening & Scaling milestone. -->
 
-- [ ] Fix bare exception handling across all providers (specific exception types)
-- [ ] Eliminate SQL injection risks in database layer (parameterized queries)
-- [ ] Add input validation/sanitization for provider method parameters
-- [ ] Add `.get()` fallbacks for all JSON response parsing (prevent KeyError crashes)
-- [ ] Implement async batch processing with chunking strategy for large CSVs (500+ rows)
-- [ ] Share HTTP clients across provider instances (connection pooling)
-- [ ] Add adaptive concurrency limits based on provider rate limits
-- [ ] Add campaign pause/resume capability
-- [ ] Implement cross-campaign contact deduplication
-- [ ] Add audit trail for all enrichment operations
-- [ ] Implement provider A/B testing (compare hit rates and accuracy)
-- [ ] Add automatic cache eviction beyond TTL
-- [ ] Index frequently queried cache columns
-- [ ] Implement row processing chunking for batch operations
-- [ ] Add API key rotation mechanism
-- [ ] Add rate limiting on email verification attempts per domain
+- ✓ Fix bare exception handling across all providers (specific exception types) — Phase 2
+- ✓ Eliminate SQL injection risks in database layer (parameterized queries) — Phase 3
+- ✓ Add input validation/sanitization for provider method parameters — Phase 3
+- ✓ Add `.get()` fallbacks for all JSON response parsing (prevent KeyError crashes) — Phase 2
+- ✓ Implement async batch processing with chunking strategy for large CSVs (500+ rows) — Phase 5
+- ✓ Share HTTP clients across provider instances (connection pooling) — Phase 5
+- ✓ Add adaptive concurrency limits based on provider rate limits — Phase 5
+- ✓ Add campaign pause/resume capability — Phase 7
+- ✓ Implement cross-campaign contact deduplication — Phase 8
+- ✓ Add audit trail for all enrichment operations — Phase 8
+- ✓ Implement provider A/B testing (compare hit rates and accuracy) — Phase 8
+- ✓ Add automatic cache eviction beyond TTL — Phase 6
+- ✓ Index frequently queried cache columns — Phase 6
+- ✓ Implement row processing chunking for batch operations — Phase 5
+- ✓ Add API key rotation mechanism — Phase 4
+- ✓ Add rate limiting on email verification attempts per domain — Phase 4
 
 ### Out of Scope
 
@@ -74,10 +74,10 @@ Reliably find verified contact emails for target companies by cascading through 
 
 - **Existing codebase:** ~5,000+ lines of Python across enrichment engine, providers, data layer, CLI, and web UI
 - **Codebase map:** Full architecture, stack, conventions, and concerns documentation exists in `.planning/codebase/`
-- **Known tech debt:** Bare exception handling in providers, SQL injection risk in database.py, JSON response fragility, unshared HTTP clients
-- **Known performance issues:** Sequential batch processing, fixed concurrency limits, unbounded cache growth, unindexed cache queries
-- **Test coverage:** 1,357 lines across 8 test files — gaps in CLI integration, UI pages, concurrent DB access, waterfall edge cases
-- **Stack:** Python 3.x, Typer, Streamlit, Pydantic v2, httpx, SQLite, pandas
+- **Known tech debt:** Resolved — exception handling hardened, SQL injection eliminated, JSON parsing safe, HTTP clients shared
+- **Known performance issues:** Resolved — chunked batches, adaptive concurrency, cache indexed + evicted, WAL checkpointed
+- **Test coverage:** 236 passing tests across 13 test files — CLI integration, concurrent DB, waterfall edge cases, malformed responses all covered
+- **Stack:** Python >= 3.11, Typer, Streamlit, Pydantic v2, httpx, aiosqlite, aiometer, tenacity, SQLite, pandas
 
 ## Constraints
 
@@ -92,9 +92,9 @@ Reliably find verified contact emails for target companies by cascading through 
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Keep SQLite, improve with indexes | Team-size workload doesn't justify PostgreSQL complexity | — Pending |
-| Fix security before adding features | SQL injection and bare exceptions are production risks | — Pending |
-| Equal priority across all 4 areas | Tackle in architectural dependency order | — Pending |
+| Keep SQLite, improve with indexes | Team-size workload doesn't justify PostgreSQL complexity | Done — composite indexes, WAL checkpoints, cache eviction |
+| Fix security before adding features | SQL injection and bare exceptions are production risks | Done — Phases 2-4 shipped before capabilities |
+| Equal priority across all 4 areas | Tackle in architectural dependency order | Done — 9 phases in dependency order |
 
 ---
-*Last updated: 2026-03-04 after initialization*
+*Last updated: 2026-03-04 after Hardening & Scaling milestone completion*
