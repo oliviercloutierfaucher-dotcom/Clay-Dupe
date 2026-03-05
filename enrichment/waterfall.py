@@ -12,6 +12,7 @@ import logging
 import time
 
 import aiometer
+import httpx
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional, TYPE_CHECKING
 
@@ -40,6 +41,9 @@ logger = logging.getLogger(__name__)
 
 # Maximum concurrent enrichments in a batch run.
 _DEFAULT_BATCH_CONCURRENCY = 5
+
+# Rows per chunk — keeps memory bounded for large CSVs.
+_DEFAULT_CHUNK_SIZE = 100
 
 
 class WaterfallOrchestrator:
@@ -70,6 +74,11 @@ class WaterfallOrchestrator:
         self.budget = budget
         self.circuit_breakers = circuit_breakers
         self.rate_limiters = rate_limiters
+        # Per-provider adaptive concurrency: start at default, halve on 429,
+        # recover by 1 on each success (min 1, max DEFAULT).
+        self._provider_concurrency: dict[ProviderName, int] = {
+            p: _DEFAULT_BATCH_CONCURRENCY for p in ProviderName
+        }
 
     # ------------------------------------------------------------------
     # Public API
@@ -341,8 +350,12 @@ class WaterfallOrchestrator:
         rows: list[dict],
         campaign_id: str,
         progress_callback: Optional[Callable[[int, int, EnrichmentResult], Any]] = None,
+        chunk_size: int = _DEFAULT_CHUNK_SIZE,
     ) -> list[EnrichmentResult]:
         """Enrich a batch of rows with bounded concurrency.
+
+        Rows are processed in explicit chunks to keep memory bounded
+        for large CSVs (hundreds or thousands of rows).
 
         Parameters
         ----------
@@ -353,42 +366,53 @@ class WaterfallOrchestrator:
         progress_callback:
             Optional ``(completed, total, result)`` callback fired after
             each row finishes.
+        chunk_size:
+            Number of rows per chunk (default 100).
 
         Returns
         -------
         list[EnrichmentResult]
             Results in the same order as the input rows.
         """
+        all_results: list[EnrichmentResult] = []
         completed = 0
+        total = len(rows)
 
-        async def _worker(indexed_row: tuple[int, dict]) -> EnrichmentResult:
-            nonlocal completed
-            index, row = indexed_row
-            try:
-                result = await self.enrich_single(row, campaign_id=campaign_id)
-            except Exception:
-                logger.exception("Batch worker failed for row %d", index)
-                result = self._not_found_result(
-                    enrichment_type=self._infer_enrichment_type(row),
-                    query_input=self._build_cache_query(
-                        row, self._infer_enrichment_type(row),
-                    ),
-                    campaign_id=campaign_id,
-                )
-            completed += 1
-            if progress_callback is not None:
+        for chunk_start in range(0, total, chunk_size):
+            chunk = rows[chunk_start : chunk_start + chunk_size]
+
+            async def _worker(indexed_row: tuple[int, dict]) -> EnrichmentResult:
+                nonlocal completed
+                index, row = indexed_row
                 try:
-                    progress_callback(completed, len(rows), result)
+                    result = await self.enrich_single(row, campaign_id=campaign_id)
                 except Exception:
-                    logger.exception("Progress callback error")
-            return result
+                    logger.exception("Batch worker failed for row %d", index)
+                    result = self._not_found_result(
+                        enrichment_type=self._infer_enrichment_type(row),
+                        query_input=self._build_cache_query(
+                            row, self._infer_enrichment_type(row),
+                        ),
+                        campaign_id=campaign_id,
+                    )
+                completed += 1
+                if progress_callback is not None:
+                    try:
+                        progress_callback(completed, total, result)
+                    except Exception:
+                        logger.exception("Progress callback error")
+                return result
 
-        ordered_results: list[EnrichmentResult] = await aiometer.run_all(
-            [functools.partial(_worker, (i, row)) for i, row in enumerate(rows)],
-            max_at_once=_DEFAULT_BATCH_CONCURRENCY,
-        )
+            chunk_results: list[EnrichmentResult] = await aiometer.run_all(
+                [
+                    functools.partial(_worker, (chunk_start + i, row))
+                    for i, row in enumerate(chunk)
+                ],
+                max_at_once=_DEFAULT_BATCH_CONCURRENCY,
+            )
+            all_results.extend(chunk_results)
 
-        return ordered_results
+        return all_results
 
     # ------------------------------------------------------------------
     # Step execution
@@ -559,6 +583,16 @@ class WaterfallOrchestrator:
             if cb is not None:
                 error_code = getattr(exc, "status_code", None)
                 cb.record_failure(error_code=error_code)
+
+            # Adaptive concurrency: halve on 429
+            if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429:
+                cur = self._provider_concurrency.get(provider_name, _DEFAULT_BATCH_CONCURRENCY)
+                self._provider_concurrency[provider_name] = max(1, cur // 2)
+                logger.info(
+                    "429 from %s — reducing concurrency to %d",
+                    provider_name.value,
+                    self._provider_concurrency[provider_name],
+                )
             return None
 
         # --- Post-call bookkeeping ---------------------------------------
@@ -568,6 +602,12 @@ class WaterfallOrchestrator:
                     cb.record_failure()
                 else:
                     cb.record_success()
+
+            # Adaptive concurrency: recover by 1 on success
+            if provider_name is not None and not response.error:
+                cur = self._provider_concurrency.get(provider_name, _DEFAULT_BATCH_CONCURRENCY)
+                if cur < _DEFAULT_BATCH_CONCURRENCY:
+                    self._provider_concurrency[provider_name] = min(cur + 1, _DEFAULT_BATCH_CONCURRENCY)
 
             # NOTE: credit recording is deferred to save_enrichment_atomic()
             # so budget deduction and result save are atomic.

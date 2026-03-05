@@ -10,6 +10,7 @@ import httpx
 
 from config.settings import ProviderName
 from data.models import Company, Person
+from providers.http_pool import get_shared_client
 
 logger = logging.getLogger(__name__)
 
@@ -40,10 +41,7 @@ class BaseProvider(ABC):
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
-            self._client = httpx.AsyncClient(
-                timeout=30.0,
-                limits=httpx.Limits(max_connections=100, max_keepalive_connections=30),
-            )
+            self._client = get_shared_client()
         return self._client
 
     async def _request(self, method: str, url: str, **kwargs) -> tuple[dict, int]:
@@ -119,7 +117,9 @@ class BaseProvider(ABC):
             return False
 
     async def close(self):
-        """Close the HTTP client."""
-        if self._client:
-            await self._client.aclose()
-            self._client = None
+        """Detach from the HTTP client.
+
+        Does NOT close the shared pool — call
+        :func:`providers.http_pool.close_shared_client` at shutdown.
+        """
+        self._client = None
