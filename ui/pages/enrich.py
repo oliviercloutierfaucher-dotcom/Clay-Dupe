@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import asyncio
 import io
+import logging
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -23,7 +25,7 @@ import streamlit as st
 from config.settings import ProviderName
 from cost.tracker import CostTracker
 from data.database import Database
-from data.io import read_input_file, ColumnMapper, apply_mapping, COLUMN_ALIASES
+from data.io import read_input_file, ColumnMapper, apply_mapping, deduplicate_rows, COLUMN_ALIASES
 from data.models import (
     Campaign,
     CampaignStatus,
@@ -32,6 +34,8 @@ from data.models import (
 
 from data.sync import run_sync
 from ui.app import get_database, get_settings
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -75,6 +79,132 @@ def _step_indicator(current: int, total: int = 6):
             col.markdown(f":blue[**{step_num}. {label}**]")
         else:
             col.markdown(f":gray[{step_num}. {label}]")
+
+
+def _run_enrichment_bg(campaign_id: str, db_path: str, settings) -> None:
+    """Run enrichment in a background daemon thread.
+
+    Creates its own :class:`Database` instance and ``asyncio`` event loop
+    to avoid thread-safety issues with aiosqlite connections shared across
+    threads.  On success the campaign status is set to COMPLETED; on any
+    unhandled exception it is set to FAILED.
+    """
+
+    async def _do_enrichment() -> None:
+        # Lazy imports to avoid circular dependencies at module level
+        from enrichment.waterfall import WaterfallOrchestrator
+        from cost.budget import BudgetManager
+        from cost.tracker import CostTracker as _CostTracker
+        from enrichment.pattern_engine import PatternEngine
+        from quality.circuit_breaker import (
+            create_circuit_breakers,
+            create_rate_limiters,
+        )
+        from quality.verification import EmailVerifier
+        from providers.apollo import ApolloProvider
+        from providers.findymail import FindymailProvider
+        from providers.icypeas import IcypeasProvider
+        from providers.contactout import ContactOutProvider
+
+        # Separate Database instance for this thread
+        bg_db = Database(db_path=db_path)
+
+        provider_classes = {
+            ProviderName.APOLLO: ApolloProvider,
+            ProviderName.FINDYMAIL: FindymailProvider,
+            ProviderName.ICYPEAS: IcypeasProvider,
+            ProviderName.CONTACTOUT: ContactOutProvider,
+        }
+
+        # Build only enabled providers that have API keys
+        providers: dict[ProviderName, Any] = {}
+        for pname, pcfg in settings.providers.items():
+            if pcfg.enabled and pcfg.api_key:
+                cls = provider_classes.get(pname)
+                if cls is not None:
+                    providers[pname] = cls(api_key=pcfg.api_key)
+
+        if not providers:
+            logger.error("No providers available for enrichment.")
+            await bg_db.update_campaign_status(
+                campaign_id, CampaignStatus.FAILED
+            )
+            return
+
+        budget = BudgetManager(bg_db)
+        cost_tracker = _CostTracker(bg_db)
+        verifier = EmailVerifier()
+        pattern_engine = PatternEngine(bg_db, verifier)
+        circuit_breakers = create_circuit_breakers()
+        rate_limiters = create_rate_limiters()
+
+        # Apply budget limits from settings
+        for pname, pcfg in settings.providers.items():
+            if hasattr(pcfg, "daily_credit_limit") and pcfg.daily_credit_limit is not None:
+                budget.set_daily_limit(pname, pcfg.daily_credit_limit)
+            if hasattr(pcfg, "monthly_credit_limit") and pcfg.monthly_credit_limit is not None:
+                budget.set_monthly_limit(pname, pcfg.monthly_credit_limit)
+
+        orchestrator = WaterfallOrchestrator(
+            db=bg_db,
+            providers=providers,
+            pattern_engine=pattern_engine,
+            budget=budget,
+            circuit_breakers=circuit_breakers,
+            rate_limiters=rate_limiters,
+            cost_tracker=cost_tracker,
+            waterfall_order=settings.waterfall_order,
+            verifier=verifier,
+        )
+
+        try:
+            # Get pending rows for this campaign
+            pending = await bg_db.get_pending_rows(campaign_id, limit=10_000)
+            row_ids = [r["id"] for r in pending]
+            rows = [
+                r.get("input_data", r)
+                if isinstance(r.get("input_data"), dict)
+                else r
+                for r in pending
+            ]
+
+            # Transition to RUNNING
+            await bg_db.update_campaign_status(
+                campaign_id, CampaignStatus.RUNNING
+            )
+
+            # Execute the waterfall enrichment
+            await orchestrator.enrich_batch(
+                rows=rows,
+                campaign_id=campaign_id,
+                campaign_row_ids=row_ids,
+            )
+
+            # Mark complete
+            await bg_db.update_campaign_status(
+                campaign_id, CampaignStatus.COMPLETED
+            )
+        except Exception:
+            logger.exception(
+                "Background enrichment failed for campaign %s", campaign_id
+            )
+            try:
+                await bg_db.update_campaign_status(
+                    campaign_id, CampaignStatus.FAILED
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to mark campaign %s as FAILED", campaign_id
+                )
+        finally:
+            # Gracefully close provider HTTP clients
+            for provider in providers.values():
+                try:
+                    await provider.close()
+                except Exception:
+                    pass
+
+    asyncio.run(_do_enrichment())
 
 
 # ---------------------------------------------------------------------------
@@ -326,6 +456,9 @@ elif current_step == 5:
 
         # Estimate cached rows (rough heuristic: count rows with existing emails)
         mapped_records = apply_mapping(df, mapper.mapping)
+        mapped_records, dupe_count = deduplicate_rows(mapped_records)
+        if dupe_count > 0:
+            st.info(f"Removed {dupe_count} duplicate rows from input.")
         cached_rows = 0
         if skip_cached:
             for rec in mapped_records:
@@ -409,6 +542,21 @@ elif current_step == 6:
             _set_step(1)
             st.rerun()
     else:
+        # ---- Start enrichment in background thread (once) -------------------
+        thread_key = f"enrichment_thread_{campaign_id}"
+        if thread_key not in st.session_state:
+            thread = threading.Thread(
+                target=_run_enrichment_bg,
+                args=(campaign_id, db.db_path, settings),
+                daemon=True,
+            )
+            thread.start()
+            st.session_state[thread_key] = True
+            logger.info(
+                "Started background enrichment thread for campaign %s",
+                campaign_id,
+            )
+
         # ---- Control buttons ------------------------------------------------
 
         control_cols = st.columns([1, 1, 4])

@@ -155,6 +155,139 @@ class TestSearchCommand:
 
 
 # ---------------------------------------------------------------------------
+# resume command
+# ---------------------------------------------------------------------------
+
+class TestResumeCommand:
+    def test_resume_help(self):
+        """resume --help shows usage."""
+        result = runner.invoke(app, ["resume", "--help"])
+        assert result.exit_code == 0
+        assert "resume" in result.output.lower() or "campaign" in result.output.lower()
+
+    def test_resume_campaign_not_found(self):
+        """resume with non-existent campaign ID fails gracefully."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "test.db")
+            db = Database(db_path=db_path)
+
+            with patch("cli.main._load_settings_safe") as mock_settings, \
+                 patch("cli.main._init_db", return_value=db), \
+                 patch("cli.main._build_providers", return_value={}), \
+                 patch("cli.main.run_sync", return_value=None), \
+                 patch("cli.main.asyncio.run"):
+
+                settings = MagicMock()
+                settings.db_path = db_path
+                settings.providers = {}
+                mock_settings.return_value = settings
+
+                result = runner.invoke(app, ["resume", "nonexistent-id"])
+                assert result.exit_code == 1
+                assert "not found" in result.output.lower()
+
+    def test_resume_all_complete(self):
+        """resume when all rows are already complete prints nothing-to-do."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "test.db")
+            db = Database(db_path=db_path)
+
+            mock_campaign = MagicMock()
+            mock_campaign.name = "Test Campaign"
+            mock_campaign.id = "test-id-123"
+            mock_campaign.status = MagicMock()
+            mock_campaign.status.value = "failed"
+
+            call_count = [0]
+            def run_sync_stub(coro):
+                call_count[0] += 1
+                if call_count[0] == 1:  # get_campaign
+                    return mock_campaign
+                elif call_count[0] == 2:  # reset_stuck_rows
+                    return 0
+                elif call_count[0] == 3:  # get_campaign_row_stats
+                    return {"pending": 0, "failed": 0, "complete": 10, "processing": 0}
+                return None
+
+            with patch("cli.main._load_settings_safe") as mock_settings, \
+                 patch("cli.main._init_db", return_value=db), \
+                 patch("cli.main._build_providers", return_value={}), \
+                 patch("cli.main.run_sync", side_effect=run_sync_stub), \
+                 patch("cli.main.asyncio.run"):
+
+                settings = MagicMock()
+                settings.db_path = db_path
+                settings.providers = {}
+                mock_settings.return_value = settings
+
+                result = runner.invoke(app, ["resume", "test-id-123"])
+                assert result.exit_code == 0
+                assert "nothing to resume" in result.output.lower() or "complete" in result.output.lower()
+
+
+# ---------------------------------------------------------------------------
+# list-campaigns command
+# ---------------------------------------------------------------------------
+
+class TestListCampaignsCommand:
+    def test_list_campaigns_help(self):
+        """list-campaigns --help shows usage."""
+        result = runner.invoke(app, ["list-campaigns", "--help"])
+        assert result.exit_code == 0
+        assert "campaign" in result.output.lower()
+
+    def test_list_campaigns_empty(self):
+        """list-campaigns with no campaigns shows nothing-found message."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "test.db")
+            db = Database(db_path=db_path)
+
+            with patch("cli.main._load_settings_safe") as mock_settings, \
+                 patch("cli.main._init_db", return_value=db), \
+                 patch("cli.main.run_sync", return_value=[]):
+
+                settings = MagicMock()
+                settings.db_path = db_path
+                settings.providers = {}
+                mock_settings.return_value = settings
+
+                result = runner.invoke(app, ["list-campaigns"])
+                assert result.exit_code == 0
+                assert "no campaigns" in result.output.lower()
+
+    def test_list_campaigns_with_data(self):
+        """list-campaigns displays campaign rows when data exists."""
+        from datetime import datetime, timezone
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "test.db")
+            db = Database(db_path=db_path)
+
+            mock_campaign = MagicMock()
+            mock_campaign.id = "abcdefgh-1234-5678-9012-abcdefghijkl"
+            mock_campaign.name = "Test Campaign"
+            mock_campaign.status = MagicMock()
+            mock_campaign.status.value = "completed"
+            mock_campaign.total_rows = 100
+            mock_campaign.enriched_rows = 85
+            mock_campaign.created_at = datetime(2026, 1, 15, 10, 30, tzinfo=timezone.utc)
+
+            with patch("cli.main._load_settings_safe") as mock_settings, \
+                 patch("cli.main._init_db", return_value=db), \
+                 patch("cli.main.run_sync", return_value=[mock_campaign]):
+
+                settings = MagicMock()
+                settings.db_path = db_path
+                settings.providers = {}
+                mock_settings.return_value = settings
+
+                result = runner.invoke(app, ["list-campaigns"])
+                assert result.exit_code == 0
+                assert "Test Campaign" in result.output
+                assert "completed" in result.output.lower()
+
+
+# ---------------------------------------------------------------------------
 # No-args shows help
 # ---------------------------------------------------------------------------
 

@@ -39,6 +39,18 @@ class Settings(BaseModel):
     max_concurrent_requests: int = 5
     icp_presets: dict[str, ICPPreset]
 
+    def get_enabled_providers(self) -> list[ProviderName]:
+        """Return providers that are enabled AND have API keys configured."""
+        return [
+            pname for pname, pcfg in self.providers.items()
+            if pcfg.enabled and pcfg.api_key
+        ]
+
+    def validate_waterfall_order(self) -> list[ProviderName]:
+        """Filter waterfall_order to only include enabled providers with keys."""
+        enabled = set(self.get_enabled_providers())
+        return [p for p in self.waterfall_order if p in enabled]
+
     def reload_api_keys(self) -> dict[ProviderName, bool]:
         """Re-read API keys from .env without restarting.
 

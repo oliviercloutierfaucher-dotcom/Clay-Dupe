@@ -7,7 +7,7 @@ import csv
 import pytest
 from pathlib import Path
 
-from data.io import ColumnMapper, read_input_file, apply_mapping
+from data.io import ColumnMapper, read_input_file, apply_mapping, deduplicate_rows
 
 
 class TestColumnMapper:
@@ -107,3 +107,75 @@ class TestApplyMapping:
         result = apply_mapping(df, mapping)
         assert "first_name" in result[0]
         assert "Skip" not in result[0]
+
+
+class TestDeduplicateRows:
+    def test_removes_exact_duplicates(self):
+        records = [
+            {"first_name": "John", "last_name": "Doe", "company_domain": "acme.com"},
+            {"first_name": "John", "last_name": "Doe", "company_domain": "acme.com"},
+            {"first_name": "Jane", "last_name": "Smith", "company_domain": "other.com"},
+        ]
+        unique, dupes = deduplicate_rows(records)
+        assert dupes == 1
+        assert len(unique) == 2
+
+    def test_case_insensitive(self):
+        records = [
+            {"first_name": "John", "last_name": "Doe", "company_domain": "Acme.com"},
+            {"first_name": "john", "last_name": "doe", "company_domain": "acme.com"},
+        ]
+        unique, dupes = deduplicate_rows(records)
+        assert dupes == 1
+        assert len(unique) == 1
+
+    def test_keeps_first_occurrence(self):
+        records = [
+            {"first_name": "John", "last_name": "Doe", "company_domain": "acme.com", "email": "first@test.com"},
+            {"first_name": "John", "last_name": "Doe", "company_domain": "acme.com", "email": "second@test.com"},
+        ]
+        unique, dupes = deduplicate_rows(records)
+        assert unique[0]["email"] == "first@test.com"
+
+    def test_empty_keys_not_deduped(self):
+        """Rows with all key fields empty should not be deduped against each other."""
+        records = [
+            {"first_name": "", "last_name": "", "company_domain": ""},
+            {"first_name": "", "last_name": "", "company_domain": ""},
+        ]
+        unique, dupes = deduplicate_rows(records)
+        assert dupes == 0
+        assert len(unique) == 2
+
+    def test_missing_keys_treated_as_empty(self):
+        """Missing key fields default to empty string."""
+        records = [
+            {"first_name": "John"},
+            {"first_name": "John"},
+        ]
+        unique, dupes = deduplicate_rows(records)
+        assert dupes == 1
+        assert len(unique) == 1
+
+    def test_no_duplicates(self):
+        records = [
+            {"first_name": "John", "last_name": "Doe", "company_domain": "acme.com"},
+            {"first_name": "Jane", "last_name": "Smith", "company_domain": "other.com"},
+        ]
+        unique, dupes = deduplicate_rows(records)
+        assert dupes == 0
+        assert len(unique) == 2
+
+    def test_whitespace_stripped(self):
+        records = [
+            {"first_name": " John ", "last_name": "Doe", "company_domain": "acme.com"},
+            {"first_name": "John", "last_name": " Doe", "company_domain": " acme.com "},
+        ]
+        unique, dupes = deduplicate_rows(records)
+        assert dupes == 1
+        assert len(unique) == 1
+
+    def test_empty_list(self):
+        unique, dupes = deduplicate_rows([])
+        assert dupes == 0
+        assert len(unique) == 0

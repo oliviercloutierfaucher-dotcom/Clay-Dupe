@@ -25,7 +25,7 @@ from rich import box
 
 from config.settings import load_settings, ProviderName, Settings, ICP_PRESETS
 from data.database import Database
-from data.io import read_input_file, ColumnMapper, apply_mapping, export_results
+from data.io import read_input_file, ColumnMapper, apply_mapping, export_results, deduplicate_rows
 from data.models import (
     Campaign,
     CampaignStatus,
@@ -82,23 +82,58 @@ def _init_db(settings: Settings) -> Database:
         raise typer.Exit(code=1)
 
 
+PROVIDER_CLASSES: dict[ProviderName, type[BaseProvider]] = {
+    ProviderName.APOLLO: ApolloProvider,
+    ProviderName.FINDYMAIL: FindymailProvider,
+    ProviderName.ICYPEAS: IcypeasProvider,
+    ProviderName.CONTACTOUT: ContactOutProvider,
+}
+
+
 def _build_providers(settings: Settings) -> dict[ProviderName, BaseProvider]:
-    """Build a mapping of ProviderName to initialised provider instances."""
-    provider_classes: dict[ProviderName, type[BaseProvider]] = {
-        ProviderName.APOLLO: ApolloProvider,
-        ProviderName.FINDYMAIL: FindymailProvider,
-        ProviderName.ICYPEAS: IcypeasProvider,
-        ProviderName.CONTACTOUT: ContactOutProvider,
-    }
+    """Build a mapping of ProviderName to initialised provider instances.
+
+    Only builds providers that are enabled AND have an API key configured.
+    """
+    enabled = set(settings.get_enabled_providers())
     providers: dict[ProviderName, BaseProvider] = {}
     for pname, pconfig in settings.providers.items():
-        if not pconfig.enabled:
+        if pname not in enabled:
             continue
-        cls = provider_classes.get(pname)
+        cls = PROVIDER_CLASSES.get(pname)
         if cls is None:
             continue
         providers[pname] = cls(api_key=pconfig.api_key)
     return providers
+
+
+async def _run_health_checks(
+    providers: dict[ProviderName, BaseProvider],
+    settings: Settings,
+) -> dict[ProviderName, str]:
+    """Run health checks on all configured providers.
+
+    Returns a dict of ProviderName -> status string for display.
+    """
+    results: dict[ProviderName, str] = {}
+
+    # Report providers with no key configured
+    for pname in ProviderName:
+        pcfg = settings.providers.get(pname)
+        if pcfg is None or not pcfg.enabled:
+            continue
+        if not pcfg.api_key:
+            results[pname] = "No key configured"
+
+    # Health-check providers that were built (have keys)
+    for pname, provider in providers.items():
+        try:
+            ok = await provider.health_check()
+            results[pname] = "OK" if ok else "Health check failed"
+        except Exception as exc:
+            results[pname] = f"Error ({exc})"
+
+    return results
 
 
 async def _close_providers(providers: dict[ProviderName, BaseProvider]) -> None:
@@ -189,18 +224,62 @@ def enrich(
     for warning in validation.get("warnings", []):
         console.print(f"  [yellow]Warning:[/] {warning}")
 
-    # --- Cost estimate ---
+    # --- Build providers & health check ---
     providers = _build_providers(settings)
+    valid_waterfall = settings.validate_waterfall_order()
+
+    if not providers:
+        console.print(
+            "[bold red]No providers available.[/] "
+            "All providers are missing API keys or are disabled.\n"
+            "Configure keys in your .env file (e.g. APOLLO_API_KEY=...)."
+        )
+        raise typer.Exit(code=1)
+
+    # Run health checks and display summary
+    health = asyncio.run(_run_health_checks(providers, settings))
+    status_parts = []
+    healthy_providers: set[ProviderName] = set()
+    for pname in ProviderName:
+        pcfg = settings.providers.get(pname)
+        if pcfg is None or not pcfg.enabled:
+            continue
+        status = health.get(pname, "Disabled")
+        if status == "OK":
+            style = "green"
+            healthy_providers.add(pname)
+        elif status == "No key configured":
+            style = "yellow"
+        else:
+            style = "red"
+        status_parts.append(f"{pname.value}: [{style}]{status}[/]")
+
+    console.print(f"\n[bold]Provider status:[/]  {'  |  '.join(status_parts)}")
+
+    # Filter waterfall to only healthy providers
+    valid_waterfall = [p for p in valid_waterfall if p in healthy_providers]
+    if not valid_waterfall:
+        console.print(
+            "[bold red]No healthy providers available for enrichment.[/] "
+            "Check your API keys and provider status above."
+        )
+        asyncio.run(_close_providers(providers))
+        raise typer.Exit(code=1)
+
+    # --- Cost estimate ---
     cost_tracker = CostTracker(db)
     cache_mgr = CacheManager(db)
 
     records = apply_mapping(df, mapper.mapping)
+    records, dupe_count = deduplicate_rows(records)
+    if dupe_count > 0:
+        console.print(f"[yellow]Removed {dupe_count} duplicate rows[/yellow]")
     cache_stats = run_sync(cache_mgr.get_stats())
 
     estimate = run_sync(cost_tracker.estimate_campaign_cost(
         total_rows=len(records),
         cached_rows=cache_stats.get("active_entries", 0),
-        waterfall_order=settings.waterfall_order,
+        waterfall_order=valid_waterfall,
     ))
 
     est_table = Table(title="Cost Estimate", box=box.SIMPLE)
@@ -247,7 +326,7 @@ def enrich(
         input_file=str(input_file),
         input_row_count=len(records),
         enrichment_types=[EnrichmentType.EMAIL],
-        waterfall_order=settings.waterfall_order,
+        waterfall_order=valid_waterfall,
         column_mapping=mapper.mapping,
         status=CampaignStatus.CREATED,
         total_rows=len(records),
@@ -282,7 +361,7 @@ def enrich(
             circuit_breakers=circuit_breakers,
             rate_limiters=rate_limiters,
             cost_tracker=cost_tracker,
-            waterfall_order=settings.waterfall_order,
+            waterfall_order=valid_waterfall,
             verifier=verifier,
         )
 
@@ -736,6 +815,217 @@ def stats(
     for dtype, ttl in cache_mgr.list_ttl_policies().items():
         ttl_table.add_row(dtype, str(ttl))
     console.print(ttl_table)
+
+
+# ---------------------------------------------------------------------------
+# resume command
+# ---------------------------------------------------------------------------
+
+@app.command()
+def resume(
+    campaign_id: str = typer.Argument(..., help="Campaign ID to resume."),
+) -> None:
+    """Resume a crashed or paused campaign.
+
+    Resets any rows stuck in 'processing' back to 'pending', then
+    re-runs the waterfall enrichment for all pending/failed rows.
+    """
+    settings = _load_settings_safe()
+    db = _init_db(settings)
+    providers = _build_providers(settings)
+
+    # Validate campaign exists
+    campaign = run_sync(db.get_campaign(campaign_id))
+    if campaign is None:
+        console.print(f"[bold red]Campaign not found:[/] {campaign_id}")
+        asyncio.run(_close_providers(providers))
+        raise typer.Exit(code=1)
+
+    console.print(f"\n[bold]Resuming campaign:[/] {campaign.name}  ({campaign.id})")
+    console.print(f"  Previous status: {campaign.status.value}")
+
+    # Reset stuck rows
+    stuck_count = run_sync(db.reset_stuck_rows(campaign_id))
+    if stuck_count:
+        console.print(f"  Reset [yellow]{stuck_count}[/] stuck 'processing' rows back to 'pending'.")
+
+    # Show row stats before resuming
+    row_stats = run_sync(db.get_campaign_row_stats(campaign_id))
+    remaining = row_stats["pending"] + row_stats["failed"]
+    console.print(
+        f"  Rows — pending: {row_stats['pending']}, failed: {row_stats['failed']}, "
+        f"complete: {row_stats['complete']}, processing: {row_stats['processing']}"
+    )
+
+    if remaining == 0:
+        console.print("[green]Nothing to resume — all rows are already complete.[/]")
+        asyncio.run(_close_providers(providers))
+        return
+
+    # Update campaign status to RUNNING
+    run_sync(db.update_campaign_status(campaign_id, CampaignStatus.RUNNING))
+
+    async def _run_resume() -> list:
+        from enrichment.waterfall import WaterfallOrchestrator
+
+        verifier = EmailVerifier()
+        budget_mgr = BudgetManager(db)
+        pattern_engine = PatternEngine(db, verifier)
+        cost_tracker_inner = CostTracker(db)
+        circuit_breakers = create_circuit_breakers(list(providers.keys()))
+        rate_limiters = create_rate_limiters(list(providers.keys()))
+
+        for pname, pconfig in settings.providers.items():
+            if pconfig.daily_credit_limit is not None:
+                budget_mgr.set_daily_limit(pname, pconfig.daily_credit_limit)
+            if pconfig.monthly_credit_limit is not None:
+                budget_mgr.set_monthly_limit(pname, pconfig.monthly_credit_limit)
+
+        orchestrator = WaterfallOrchestrator(
+            db=db,
+            providers=providers,
+            pattern_engine=pattern_engine,
+            budget=budget_mgr,
+            circuit_breakers=circuit_breakers,
+            rate_limiters=rate_limiters,
+            cost_tracker=cost_tracker_inner,
+            waterfall_order=settings.waterfall_order,
+            verifier=verifier,
+        )
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TextColumn("({task.completed}/{task.total})"),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Resuming enrichment...", total=remaining)
+
+            def _progress_cb(completed: int, total_rows: int, result) -> None:
+                progress.update(task, completed=completed)
+
+            results = await orchestrator.resume_batch(
+                campaign_id=campaign_id,
+                progress_callback=_progress_cb,
+            )
+
+        return results
+
+    try:
+        results = asyncio.run(_run_resume())
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Interrupted -- partial progress saved.[/]")
+        run_sync(db.update_campaign_status(campaign_id, CampaignStatus.PAUSED))
+        asyncio.run(_close_providers(providers))
+        raise typer.Exit(code=130)
+    except Exception as exc:
+        console.print(f"\n[bold red]Resume failed:[/] {exc}")
+        run_sync(db.update_campaign_status(campaign_id, CampaignStatus.FAILED))
+        asyncio.run(_close_providers(providers))
+        raise typer.Exit(code=1)
+    finally:
+        asyncio.run(_close_providers(providers))
+
+    # Summary
+    found = sum(1 for r in results if r.found)
+    failed = sum(1 for r in results if not r.found)
+
+    # Update final campaign status
+    row_stats_final = run_sync(db.get_campaign_row_stats(campaign_id))
+    if row_stats_final["pending"] == 0 and row_stats_final["processing"] == 0:
+        run_sync(db.update_campaign_status(
+            campaign_id, CampaignStatus.COMPLETED,
+            enriched_rows=row_stats_final["complete"],
+            found_rows=found,
+            failed_rows=row_stats_final["failed"],
+        ))
+        final_status = "COMPLETED"
+    else:
+        final_status = "RUNNING (rows still remaining)"
+
+    summary_panel = Panel(
+        f"Processed: {len(results)}  |  Found: {found}  |  Failed: {failed}\n"
+        f"Campaign status: {final_status}",
+        title="Resume Complete",
+        border_style="green",
+    )
+    console.print(summary_panel)
+
+
+# ---------------------------------------------------------------------------
+# list-campaigns command
+# ---------------------------------------------------------------------------
+
+@app.command(name="list-campaigns")
+def list_campaigns(
+    limit: int = typer.Option(20, "--limit", "-n", help="Number of campaigns to show."),
+    status_filter: Optional[str] = typer.Option(
+        None, "--status", "-s",
+        help="Filter by status (created, running, paused, completed, failed, cancelled).",
+    ),
+) -> None:
+    """List recent campaigns with their status and progress."""
+    settings = _load_settings_safe()
+    db = _init_db(settings)
+
+    campaigns = run_sync(db.get_recent_campaigns(limit=limit))
+
+    if status_filter:
+        status_filter_lower = status_filter.lower()
+        campaigns = [c for c in campaigns if c.status.value == status_filter_lower]
+
+    if not campaigns:
+        console.print("[dim]No campaigns found.[/]")
+        return
+
+    table = Table(title="Campaigns", box=box.ROUNDED, show_lines=True)
+    table.add_column("ID", style="dim", max_width=12)
+    table.add_column("Name", style="cyan", max_width=30)
+    table.add_column("Status")
+    table.add_column("Progress", justify="right")
+    table.add_column("Created", max_width=19)
+
+    for c in campaigns:
+        # Colour-code status
+        status_val = c.status.value
+        if status_val == "completed":
+            status_display = f"[green]{status_val}[/]"
+        elif status_val in ("failed", "cancelled"):
+            status_display = f"[red]{status_val}[/]"
+        elif status_val == "running":
+            status_display = f"[yellow]{status_val}[/]"
+        elif status_val == "paused":
+            status_display = f"[blue]{status_val}[/]"
+        else:
+            status_display = status_val
+
+        # Progress info
+        total = c.total_rows or 0
+        enriched = c.enriched_rows or 0
+        if total > 0:
+            pct = enriched / total * 100
+            progress_str = f"{enriched}/{total} ({pct:.0f}%)"
+        else:
+            progress_str = "-"
+
+        # Truncate ID for display
+        short_id = c.id[:8] + "..."
+
+        created_str = c.created_at.strftime("%Y-%m-%d %H:%M") if c.created_at else "-"
+
+        table.add_row(short_id, c.name, status_display, progress_str, created_str)
+
+    console.print(table)
+
+    # Hint about resumable campaigns
+    resumable = [c for c in campaigns if c.status.value in ("failed", "paused", "running")]
+    if resumable:
+        console.print(
+            f"\n[dim]Tip: {len(resumable)} campaign(s) can be resumed with:[/] "
+            "[bold]clay-dupe resume <campaign_id>[/]"
+        )
 
 
 # ---------------------------------------------------------------------------

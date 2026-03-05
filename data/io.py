@@ -322,6 +322,39 @@ def read_input_file(
 # apply_mapping
 # ---------------------------------------------------------------------------
 
+def deduplicate_rows(
+    records: list[dict],
+    key_fields: tuple[str, ...] = ("first_name", "last_name", "company_domain"),
+) -> tuple[list[dict], int]:
+    """Remove duplicate rows based on key fields.
+
+    Returns (deduplicated_records, duplicate_count).
+    Keys are case-insensitive.
+    """
+    seen: set[tuple[str, ...]] = set()
+    unique: list[dict] = []
+    dupes = 0
+    for record in records:
+        key = tuple(
+            (record.get(f) or "").strip().lower()
+            for f in key_fields
+        )
+        # Skip if all key fields are empty (would match all empty rows)
+        if all(k == "" for k in key):
+            unique.append(record)
+            continue
+        if key in seen:
+            dupes += 1
+            continue
+        seen.add(key)
+        unique.append(record)
+    return unique, dupes
+
+
+# ---------------------------------------------------------------------------
+# apply_mapping
+# ---------------------------------------------------------------------------
+
 def apply_mapping(df: pd.DataFrame, mapping: dict[str, str]) -> list[dict[str, str]]:
     """Apply column mapping to a DataFrame.
 

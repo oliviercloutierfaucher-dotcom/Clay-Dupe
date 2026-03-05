@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from config.settings import load_settings, Settings
+from config.settings import load_settings, Settings, ProviderName
 from data.database import Database
 
 
@@ -38,6 +38,28 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# ---------------------------------------------------------------------------
+# Startup provider validation
+# ---------------------------------------------------------------------------
+
+settings = get_settings()
+enabled = settings.get_enabled_providers()
+if not enabled:
+    st.error(
+        "**No API keys configured.** Go to Settings to add your API keys. "
+        "Without at least one provider key, enrichment will not work."
+    )
+else:
+    missing_key_providers = [
+        pname.value for pname, pcfg in settings.providers.items()
+        if pcfg.enabled and not pcfg.api_key
+    ]
+    if missing_key_providers:
+        st.warning(
+            f"**Some providers have no API key:** {', '.join(missing_key_providers)}. "
+            "These providers will be skipped during enrichment."
+        )
 
 # ---------------------------------------------------------------------------
 # Navigation

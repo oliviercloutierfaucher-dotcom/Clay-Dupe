@@ -770,6 +770,16 @@ class Database:
                 stats[r["status"]] = r["cnt"]
             return stats
 
+    async def reset_stuck_rows(self, campaign_id: str) -> int:
+        """Reset rows stuck in 'processing' back to 'pending'. Returns count."""
+        async with self._connect() as conn:
+            cursor = await conn.execute(
+                "UPDATE campaign_rows SET status = 'pending', processed_at = NULL "
+                "WHERE campaign_id = ? AND status = 'processing'",
+                (campaign_id,),
+            )
+            return cursor.rowcount
+
     # ------------------------------------------------------------------
     # Enrichment Results
     # ------------------------------------------------------------------
