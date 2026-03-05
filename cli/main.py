@@ -256,11 +256,16 @@ def enrich(
     run_sync(db.create_campaign_rows(campaign.id, records))
     run_sync(db.update_campaign_status(campaign.id, CampaignStatus.RUNNING))
 
-    # --- Run enrichment ---
+    # --- Run enrichment via WaterfallOrchestrator ---
     async def _run_enrichment() -> tuple[list[Person], dict, dict]:
+        from enrichment.waterfall import WaterfallOrchestrator
+
         verifier = EmailVerifier()
         budget_mgr = BudgetManager(db)
         pattern_engine = PatternEngine(db, verifier)
+        cost_tracker = CostTracker(db)
+        circuit_breakers = create_circuit_breakers(list(providers.keys()))
+        rate_limiters = create_rate_limiters(list(providers.keys()))
 
         # Apply budget limits from settings
         for pname, pconfig in settings.providers.items():
@@ -269,13 +274,20 @@ def enrich(
             if pconfig.monthly_credit_limit is not None:
                 budget_mgr.set_monthly_limit(pname, pconfig.monthly_credit_limit)
 
-        enriched_people: list[Person] = []
-        companies: dict[str, object] = {}
-        enrichment_meta: dict[str, dict] = {}
+        orchestrator = WaterfallOrchestrator(
+            db=db,
+            providers=providers,
+            pattern_engine=pattern_engine,
+            budget=budget_mgr,
+            circuit_breakers=circuit_breakers,
+            rate_limiters=rate_limiters,
+            cost_tracker=cost_tracker,
+            waterfall_order=settings.waterfall_order,
+        )
 
         total = len(records)
-        found_count = 0
-        failed_count = 0
+        enriched_people: list[Person] = []
+        enrichment_meta: dict[str, dict] = {}
 
         with Progress(
             SpinnerColumn(),
@@ -287,145 +299,70 @@ def enrich(
         ) as progress:
             task = progress.add_task("Enriching...", total=total)
 
+            def _progress_cb(completed: int, total_rows: int, result) -> None:
+                progress.update(task, completed=completed)
+
+            # Get campaign row IDs for per-row status tracking
             pending_rows = await db.get_pending_rows(campaign.id, limit=total)
+            row_ids = [r["id"] for r in pending_rows]
 
-            for row_data in pending_rows:
-                row_input = row_data.get("input_data", row_data)
-                if isinstance(row_input, str):
-                    import json
-                    try:
-                        row_input = json.loads(row_input)
-                    except (ValueError, TypeError):
-                        row_input = {}
+            results = await orchestrator.enrich_batch(
+                rows=records,
+                campaign_id=campaign.id,
+                progress_callback=_progress_cb,
+                campaign_row_ids=row_ids,
+            )
 
-                first_name = row_input.get("first_name", "")
-                last_name = row_input.get("last_name", "")
-                domain = row_input.get("company_domain", "") or row_input.get("domain", "")
-                company_name = row_input.get("company_name", "")
+        found_count = 0
+        failed_count = 0
+        for result in results:
+            if result.found:
+                found_count += 1
+            else:
+                failed_count += 1
 
-                # Split full_name if first/last not present
-                if not first_name and row_input.get("full_name"):
-                    parts = row_input["full_name"].split(None, 1)
-                    first_name = parts[0] if parts else ""
-                    last_name = parts[1] if len(parts) > 1 else ""
-
-                if not first_name or not (domain or company_name):
-                    failed_count += 1
-                    await db.update_campaign_row(
-                        row_data["id"], "skipped", error="Insufficient data",
-                    )
-                    progress.advance(task)
-                    continue
-
-                email_found = None
-
-                # Try pattern engine first (free)
+            # Build person from result for export
+            person_id = result.person_id
+            if person_id:
                 try:
-                    if domain:
-                        email_found = await pattern_engine.try_pattern_match(
-                            first_name, last_name, domain,
-                        )
+                    person = await db.get_person(person_id)
+                    if person:
+                        enriched_people.append(person)
+                        enrichment_meta[person.id] = {
+                            "source_provider": result.source_provider.value if result.source_provider else "",
+                            "confidence_score": result.confidence_score,
+                            "verification_status": result.verification_status.value if result.verification_status else "unknown",
+                            "waterfall_position": result.waterfall_position,
+                            "found_at": result.found_at.isoformat() if hasattr(result, "found_at") and result.found_at else None,
+                            "cost_credits": result.cost_credits,
+                            "from_cache": result.from_cache,
+                        }
+                        continue
                 except Exception:
-                    logger.debug("Pattern match failed", exc_info=True)
+                    pass
 
-                # Try cache
-                if not email_found and domain:
-                    cached = await cache_mgr.get(
-                        "any", "email_lookup",
-                        {"first_name": first_name, "last_name": last_name, "domain": domain},
-                    )
-                    if cached and cached.get("email"):
-                        email_found = cached["email"]
-
-                # Waterfall through providers
-                if not email_found:
-                    lookup_domain = domain or company_name
-                    for pname in settings.waterfall_order:
-                        provider = providers.get(pname)
-                        if provider is None:
-                            continue
-                        if not await budget_mgr.can_spend(pname, 1.0, campaign.id):
-                            continue
-
-                        try:
-                            resp = await provider.find_email(
-                                first_name, last_name, lookup_domain,
-                            )
-                        except Exception as exc:
-                            logger.warning(
-                                "Provider %s failed: %s", pname.value, exc,
-                            )
-                            continue
-
-                        await budget_mgr.record_spend(
-                            pname, resp.credits_used,
-                            campaign_id=campaign.id, found=resp.found,
-                        )
-
-                        if resp.found and resp.email:
-                            email_found = resp.email
-
-                            # Cache the result
-                            await cache_mgr.set(
-                                pname.value, "email_lookup",
-                                {"first_name": first_name, "last_name": last_name, "domain": domain},
-                                {"email": resp.email, "provider": pname.value},
-                                found=True,
-                            )
-
-                            # Learn pattern
-                            if domain:
-                                await pattern_engine.learn_pattern(
-                                    resp.email, first_name, last_name, domain,
-                                )
-                            break
-                        else:
-                            # Negative cache
-                            await cache_mgr.set(
-                                pname.value, "email_lookup",
-                                {"first_name": first_name, "last_name": last_name, "domain": domain},
-                                {"email": None, "provider": pname.value},
-                                found=False,
-                            )
-
-                # Build person
+            # Fallback: build person from input row if no person_id
+            idx = results.index(result)
+            if idx < len(records):
+                row_input = records[idx]
                 person = Person(
-                    first_name=first_name,
-                    last_name=last_name,
-                    email=email_found,
-                    company_name=company_name or None,
-                    company_domain=domain or None,
+                    first_name=row_input.get("first_name", ""),
+                    last_name=row_input.get("last_name", ""),
+                    email=result.result_data.get("email") if result.found else None,
+                    company_name=row_input.get("company_name"),
+                    company_domain=row_input.get("company_domain"),
                     title=row_input.get("title"),
                     linkedin_url=row_input.get("linkedin_url"),
-                    city=row_input.get("city"),
-                    state=row_input.get("state"),
-                    country=row_input.get("country"),
                 )
-                person = await db.upsert_person(person)
                 enriched_people.append(person)
-
-                if email_found:
-                    found_count += 1
-                    await db.update_campaign_row(
-                        row_data["id"], "completed", person_id=person.id,
-                    )
-                else:
-                    await db.update_campaign_row(
-                        row_data["id"], "completed", person_id=person.id,
-                        error="No email found",
-                    )
-
                 enrichment_meta[person.id] = {
-                    "source_provider": "",
-                    "confidence_score": None,
-                    "verification_status": "unknown",
-                    "waterfall_position": None,
-                    "found_at": None,
-                    "cost_credits": 0,
-                    "from_cache": False,
+                    "source_provider": result.source_provider.value if result.source_provider else "",
+                    "confidence_score": result.confidence_score,
+                    "verification_status": result.verification_status.value if result.verification_status else "unknown",
+                    "waterfall_position": result.waterfall_position,
+                    "cost_credits": result.cost_credits,
+                    "from_cache": result.from_cache,
                 }
-
-                progress.advance(task)
 
         await db.update_campaign_status(
             campaign.id,
@@ -435,7 +372,7 @@ def enrich(
             failed_rows=failed_count,
         )
 
-        return enriched_people, companies, enrichment_meta
+        return enriched_people, {}, enrichment_meta
 
     try:
         people, companies, meta = asyncio.run(_run_enrichment())

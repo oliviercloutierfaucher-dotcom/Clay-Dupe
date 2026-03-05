@@ -314,3 +314,15 @@ CREATE INDEX IF NOT EXISTS ix_audit_log_timestamp
 
 CREATE INDEX IF NOT EXISTS ix_audit_log_user_timestamp
     ON audit_log(user_id, timestamp DESC);
+
+-- ============================================================
+-- 11. provider_domain_stats — track hit/miss rates per provider per domain
+-- ============================================================
+CREATE TABLE IF NOT EXISTS provider_domain_stats (
+    provider        TEXT NOT NULL,
+    domain          TEXT NOT NULL,
+    attempts        INTEGER DEFAULT 0,
+    hits            INTEGER DEFAULT 0,
+    last_attempt    TEXT,
+    PRIMARY KEY (provider, domain)
+);

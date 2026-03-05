@@ -34,6 +34,8 @@ def _make_orchestrator(
     db.get_person_by_name_domain = AsyncMock(return_value=None)
     db.get_campaign = AsyncMock(return_value=None)
     db.wal_checkpoint = AsyncMock()
+    db.should_skip_provider_for_domain = AsyncMock(return_value=False)
+    db.record_provider_domain_attempt = AsyncMock()
 
     providers = {}
     for pname in [ProviderName.APOLLO, ProviderName.ICYPEAS, ProviderName.FINDYMAIL]:

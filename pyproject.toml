@@ -28,5 +28,8 @@ dev = [
     "pytest-asyncio>=0.23",
 ]
 
+[tool.setuptools.packages.find]
+include = ["cli*", "config*", "cost*", "data*", "enrichment*", "providers*", "quality*", "ui*"]
+
 [project.scripts]
 clay-dupe = "cli.main:main"

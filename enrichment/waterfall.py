@@ -68,6 +68,8 @@ class WaterfallOrchestrator:
         budget: BudgetManager,
         circuit_breakers: dict[ProviderName, CircuitBreaker],
         rate_limiters: dict[ProviderName, Any],
+        cost_tracker: Optional[Any] = None,
+        waterfall_order: Optional[list[ProviderName]] = None,
     ) -> None:
         self.db = db
         self.providers = providers
@@ -75,6 +77,11 @@ class WaterfallOrchestrator:
         self.budget = budget
         self.circuit_breakers = circuit_breakers
         self.rate_limiters = rate_limiters
+        self.cost_tracker = cost_tracker
+        # Explicit waterfall order from settings (if provided)
+        self._configured_order = waterfall_order
+        # Adaptive order computed at first batch run
+        self._adaptive_order: Optional[list[ProviderName]] = None
         # Per-provider adaptive concurrency: start at default, halve on 429,
         # recover by 1 on each success (min 1, max DEFAULT).
         self._provider_concurrency: dict[ProviderName, int] = {
@@ -127,7 +134,7 @@ class WaterfallOrchestrator:
                 enrichment_type=enrichment_type.value,
                 query_input=cache_query,
             )
-            if cached is not None:
+            if cached is not None and cached.get("found", False):
                 logger.debug(
                     "Cache hit for %s/%s query=%s",
                     provider_name.value,
@@ -139,7 +146,7 @@ class WaterfallOrchestrator:
                     enrichment_type=enrichment_type,
                     provider_name=provider_name,
                     response_data=cached,
-                    found=cached.get("found", False),
+                    found=True,
                     query_input=cache_query,
                     campaign_id=campaign_id,
                     response_time_ms=elapsed_ms,
@@ -195,7 +202,12 @@ class WaterfallOrchestrator:
             )
 
         # --- 3. Provider sequence ----------------------------------------
-        waterfall_order = list(self.providers.keys())
+        # Use adaptive order > configured order > provider dict order
+        waterfall_order = (
+            self._adaptive_order
+            or self._configured_order
+            or list(self.providers.keys())
+        )
         has_linkedin = bool(row.get("linkedin_url"))
         steps = get_provider_sequence(category, waterfall_order, has_linkedin=has_linkedin)
 
@@ -413,6 +425,23 @@ class WaterfallOrchestrator:
         completed = 0
         total = len(rows)
 
+        # Compute adaptive waterfall order from historical data
+        if self.cost_tracker is not None and self._adaptive_order is None:
+            try:
+                recommended = await self.cost_tracker.get_waterfall_recommendation()
+                if recommended:
+                    self._adaptive_order = recommended
+                    order_str = " -> ".join(p.value for p in recommended)
+                    logger.info("Adaptive waterfall order applied: %s", order_str)
+                    await self.db.log_action(
+                        action="waterfall_reorder",
+                        entity_type="campaign",
+                        entity_id=campaign_id,
+                        details={"new_order": [p.value for p in recommended]},
+                    )
+            except Exception:
+                logger.debug("Adaptive ordering failed (non-critical)")
+
         for chunk_start in range(0, total, chunk_size):
             # --- Pause check between chunks --------------------------------
             try:
@@ -463,7 +492,7 @@ class WaterfallOrchestrator:
                 else:
                     # Mark row as complete
                     if row_id:
-                        status = "complete" if result.found else "complete"
+                        status = "complete" if result.found else "failed"
                         try:
                             await self.db.update_campaign_row(
                                 row_id, status, person_id=result.person_id,
@@ -614,6 +643,20 @@ class WaterfallOrchestrator:
         if provider is None:
             logger.warning("Provider %s not available, skipping", provider_name.value)
             return None
+
+        # Domain stats gate — skip providers with 0 hits over 5+ attempts for this domain
+        if domain and action == "find_email":
+            try:
+                if await self.db.should_skip_provider_for_domain(
+                    provider_name.value, domain,
+                ):
+                    logger.info(
+                        "Skipping %s for domain %s (0 hits in 5+ attempts)",
+                        provider_name.value, domain,
+                    )
+                    return None
+            except Exception:
+                pass  # non-critical — proceed with the call
 
         # Budget gate (skip for free actions)
         if not is_free:
@@ -777,6 +820,33 @@ class WaterfallOrchestrator:
             # NOTE: credit recording is deferred to save_enrichment_atomic()
             # so budget deduction and result save are atomic.
 
+            # Record domain stats and negative cache for misses
+            if domain and action == "find_email":
+                try:
+                    await self.db.record_provider_domain_attempt(
+                        provider_name.value, domain, hit=response.found,
+                    )
+                except Exception:
+                    pass
+                # Cache misses so we don't repeat failed lookups
+                if not response.found:
+                    cache_query = self._build_cache_query(
+                        {"first_name": first_name, "last_name": last_name,
+                         "company_domain": domain},
+                        EnrichmentType.EMAIL,
+                    )
+                    try:
+                        await self.db.cache_set(
+                            provider=provider_name.value,
+                            enrichment_type=EnrichmentType.EMAIL.value,
+                            query_input=cache_query,
+                            response_data={"found": False, "email": None},
+                            found=False,
+                            ttl_days=7,  # shorter TTL for misses
+                        )
+                    except Exception:
+                        pass
+
             # Audit trail: log every provider API call
             try:
                 await self.db.log_action(
@@ -911,7 +981,7 @@ class WaterfallOrchestrator:
             logger.exception("Failed to persist person")
 
         # Persist company if we have domain data in the response
-        company_data = response.data.get("company") or {}
+        company_data = response.data.get("organization") or response.data.get("company") or {}
         company_domain = company_data.get("domain") or row.get("company_domain")
         if company_domain and company_data:
             try:

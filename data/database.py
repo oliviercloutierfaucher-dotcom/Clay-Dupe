@@ -385,6 +385,17 @@ class Database:
     # Person Operations
     # ------------------------------------------------------------------
 
+    async def get_person(self, person_id: str) -> Optional[Person]:
+        """Get a person by ID."""
+        async with self._connect() as conn:
+            cursor = await conn.execute(
+                "SELECT * FROM people WHERE id = ?", (person_id,),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                return None
+            return self._row_to_person(row)
+
     async def upsert_person(self, person: Person) -> Person:
         """Upsert a person.
 
@@ -1125,3 +1136,48 @@ class Database:
                     json.dumps(details) if details else "{}",
                 ),
             )
+
+    # ------------------------------------------------------------------
+    # Provider Domain Stats
+    # ------------------------------------------------------------------
+
+    async def record_provider_domain_attempt(
+        self, provider: str, domain: str, hit: bool,
+    ) -> None:
+        """Record a provider attempt for a domain (hit or miss)."""
+        async with self._connect() as conn:
+            await conn.execute(
+                """INSERT INTO provider_domain_stats
+                   (provider, domain, attempts, hits, last_attempt)
+                   VALUES (?, ?, 1, ?, ?)
+                   ON CONFLICT(provider, domain) DO UPDATE SET
+                       attempts = provider_domain_stats.attempts + 1,
+                       hits = provider_domain_stats.hits + ?,
+                       last_attempt = ?""",
+                (
+                    provider.lower(),
+                    domain.lower(),
+                    int(hit),
+                    datetime.utcnow().isoformat(),
+                    int(hit),
+                    datetime.utcnow().isoformat(),
+                ),
+            )
+
+    async def should_skip_provider_for_domain(
+        self,
+        provider: str,
+        domain: str,
+        min_attempts: int = 5,
+    ) -> bool:
+        """Return True if the provider has 0 hits over min_attempts for this domain."""
+        async with self._connect() as conn:
+            cursor = await conn.execute(
+                """SELECT attempts, hits FROM provider_domain_stats
+                   WHERE provider = ? AND domain = ?""",
+                (provider.lower(), domain.lower()),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                return False
+            return row["attempts"] >= min_attempts and row["hits"] == 0
