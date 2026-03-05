@@ -15,7 +15,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Infrastructure Foundation** - Pin Python >= 3.11, migrate to aiosqlite, and integrate aiometer — prerequisites for all async refactoring
 - [x] **Phase 2: Exception & Response Hardening** - Replace bare exception handlers with typed boundaries and add .get() fallbacks on all API response parsing
 - [x] **Phase 3: Data Layer Hardening** - Eliminate SQL injection via parameterized queries and add input validation before all provider API calls
-- [ ] **Phase 4: Operational Hardening** - Add API key rotation, SMTP rate limiting, and atomic budget/state transactions
+- [x] **Phase 4: Operational Hardening** - Add API key rotation, SMTP rate limiting, and atomic budget/state transactions
 - [ ] **Phase 5: I/O & Concurrency Performance** - Implement chunked batch processing, shared HTTP connection pool, and adaptive per-provider concurrency
 - [ ] **Phase 6: Cache & Database Performance** - Add cache table indexes, automatic cache eviction, and WAL checkpoint management
 - [ ] **Phase 7: Campaign State Management** - Add checkpoint-per-row progress tracking, pause flag, and resume from last checkpoint
@@ -82,9 +82,9 @@ Plans:
 **Plans**: TBD
 
 Plans:
-- [ ] 04-01: Implement API key rotation mechanism — reload from .env without restart
-- [ ] 04-02: Add per-domain rate limiting on SMTP verification attempts
-- [ ] 04-03: Wrap budget check, credit deduction, result write, and row status update in a single BEGIN IMMEDIATE transaction
+- [x] 04-01: Implement API key rotation mechanism — reload from .env without restart
+- [x] 04-02: Add per-domain rate limiting on SMTP verification attempts
+- [x] 04-03: Wrap budget check, credit deduction, result write, and row status update in a single BEGIN IMMEDIATE transaction
 
 ### Phase 5: I/O & Concurrency Performance
 **Goal**: Large CSV batches do not materialize all coroutines at once, HTTP connections are reused across provider calls, and per-provider concurrency adapts to live rate limit signals rather than using a fixed hardcoded limit
@@ -180,7 +180,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 1. Infrastructure Foundation | 3/3 | Complete | 2026-03-04 |
 | 2. Exception & Response Hardening | 2/2 | Complete | 2026-03-04 |
 | 3. Data Layer Hardening | 2/2 | Complete | 2026-03-04 |
-| 4. Operational Hardening | 0/3 | Not started | - |
+| 4. Operational Hardening | 3/3 | Complete | 2026-03-04 |
 | 5. I/O & Concurrency Performance | 0/3 | Not started | - |
 | 6. Cache & Database Performance | 0/3 | Not started | - |
 | 7. Campaign State Management | 0/3 | Not started | - |
