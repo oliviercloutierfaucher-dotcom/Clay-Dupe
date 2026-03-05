@@ -156,7 +156,7 @@ class IcypeasProvider(BaseProvider):
 
         1. Submit bulk job via POST /api/bulk (max 5000 rows).
         2. Poll results via POST /api/bulk-single-searchs/read.
-        3. Poll every 2 seconds until all rows are resolved.
+        3. Poll with adaptive backoff (1s -> 5s max) until all rows are resolved.
         4. Paginate with limit=100 and next=true.
         """
         if not rows:
@@ -202,8 +202,11 @@ class IcypeasProvider(BaseProvider):
         collected_items: list[dict] = []
         total_expected = len(rows)
 
+        poll_interval = 1.0   # start fast, back off exponentially
+        max_interval = 5.0
         while len(collected_items) < total_expected:
-            await asyncio.sleep(2)
+            await asyncio.sleep(poll_interval)
+            poll_interval = min(poll_interval * 1.5, max_interval)
 
             # Paginate through available results
             page_items: list[dict] = []

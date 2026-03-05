@@ -540,6 +540,52 @@ class Database:
                 return None
             return self._row_to_person(row)
 
+    async def get_persons_by_name_domain_batch(
+        self, lookups: list[tuple[str, str, str]],
+    ) -> dict[tuple[str, str, str], Person]:
+        """Batch lookup persons by (first_name, last_name, domain).
+
+        Returns a dict mapping each matching (first, last, domain) key
+        (all lowered/stripped) to the corresponding Person object.
+        Only persons with a non-null email are included.
+        """
+        if not lookups:
+            return {}
+
+        results: dict[tuple[str, str, str], Person] = {}
+        async with self._connect() as conn:
+            # Normalise keys and build OR conditions in batches of 50
+            # to stay well within SQLite's variable limit.
+            normalised = [
+                (fn.strip().lower(), ln.strip().lower(), d.strip().lower())
+                for fn, ln, d in lookups
+            ]
+            batch_size = 50
+            for i in range(0, len(normalised), batch_size):
+                batch = normalised[i : i + batch_size]
+                conditions = []
+                params: list[str] = []
+                for fn, ln, d in batch:
+                    conditions.append(
+                        "(lower(first_name) = ? AND lower(last_name) = ? AND lower(company_domain) = ?)"
+                    )
+                    params.extend([fn, ln, d])
+                where_clause = " OR ".join(conditions)
+                cursor = await conn.execute(
+                    f"SELECT * FROM people WHERE email IS NOT NULL AND ({where_clause})",
+                    params,
+                )
+                rows = await cursor.fetchall()
+                for row in rows:
+                    person = self._row_to_person(row)
+                    key = (
+                        (person.first_name or "").strip().lower(),
+                        (person.last_name or "").strip().lower(),
+                        (person.company_domain or "").strip().lower(),
+                    )
+                    results[key] = person
+        return results
+
     async def search_people(self, **filters) -> list[Person]:
         """Search people with dynamic filters.
 
@@ -683,16 +729,20 @@ class Database:
     # ------------------------------------------------------------------
 
     async def create_campaign_rows(self, campaign_id: str, rows: list[dict]) -> None:
-        """Bulk insert campaign rows."""
+        """Bulk insert campaign rows using executemany for performance."""
+        if not rows:
+            return
+        values_list = [
+            (str(uuid.uuid4()), campaign_id, i + 1, json.dumps(row_data))
+            for i, row_data in enumerate(rows)
+        ]
         async with self._connect() as conn:
-            for i, row_data in enumerate(rows):
-                row_id = str(uuid.uuid4())
-                await conn.execute(
-                    """INSERT INTO campaign_rows
-                       (id, campaign_id, row_number, input_data, status)
-                       VALUES (?, ?, ?, ?, 'pending')""",
-                    (row_id, campaign_id, i + 1, json.dumps(row_data)),
-                )
+            await conn.executemany(
+                """INSERT INTO campaign_rows
+                   (id, campaign_id, row_number, input_data, status)
+                   VALUES (?, ?, ?, ?, 'pending')""",
+                values_list,
+            )
 
     async def update_campaign_row(
         self, row_id: str, status: str, person_id: str = None, error: str = None

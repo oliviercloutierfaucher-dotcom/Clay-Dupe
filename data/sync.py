@@ -25,10 +25,31 @@ nest_asyncio.apply()
 _loop: asyncio.AbstractEventLoop | None = None
 
 
-def run_sync(coro: Coroutine[Any, Any, Any]) -> Any:
-    """Execute an async coroutine synchronously and return its result."""
+def run_sync(coro: Coroutine[Any, Any, Any], timeout: float = 30.0) -> Any:
+    """Execute an async coroutine synchronously and return its result.
+
+    Parameters
+    ----------
+    coro : Coroutine
+        The async coroutine to execute.
+    timeout : float
+        Maximum seconds to wait before aborting.  Defaults to 30.
+        Pass ``None`` to disable the timeout.
+
+    Raises
+    ------
+    TimeoutError
+        If the coroutine does not complete within *timeout* seconds.
+    """
     global _loop
     if _loop is None or _loop.is_closed():
         _loop = asyncio.new_event_loop()
         asyncio.set_event_loop(_loop)
-    return _loop.run_until_complete(coro)
+    try:
+        if timeout is not None:
+            return _loop.run_until_complete(asyncio.wait_for(coro, timeout=timeout))
+        return _loop.run_until_complete(coro)
+    except asyncio.TimeoutError:
+        raise TimeoutError(
+            f"run_sync: coroutine did not complete within {timeout}s timeout"
+        ) from None

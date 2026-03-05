@@ -302,22 +302,56 @@ class ApolloProvider(BaseProvider):
         """Batch email lookup via POST /people/bulk_match.
 
         Max 10 per call. Larger lists are chunked automatically.
+        Deduplicates within each chunk by (first_name, last_name, domain) to
+        avoid wasting API credits on repeated entries.
         """
         all_results: list[ProviderResponse] = []
 
         for i in range(0, len(rows), 10):
             chunk = rows[i : i + 10]
-            details = [
-                {
-                    "first_name": r.get("first_name", ""),
-                    "last_name": r.get("last_name", ""),
-                    "domain": r.get("domain", ""),
-                }
-                for r in chunk
-            ]
 
+            # --- Deduplicate within chunk ---
+            # Map each unique (first_name, last_name, domain) to its first
+            # occurrence index within the chunk, and track which chunk
+            # positions share the same key.
+            unique_details: list[dict] = []
+            unique_keys: list[tuple[str, str, str]] = []
+            # Maps dedup key -> index into unique_details
+            key_to_unique_idx: dict[tuple[str, str, str], int] = {}
+            # Maps each chunk position -> index into unique_details
+            chunk_pos_to_unique_idx: list[int] = []
+
+            for pos, r in enumerate(chunk):
+                fn = r.get("first_name", "").strip().lower()
+                ln = r.get("last_name", "").strip().lower()
+                dom = r.get("domain", "").strip().lower()
+                key = (fn, ln, dom)
+
+                if key in key_to_unique_idx:
+                    chunk_pos_to_unique_idx.append(key_to_unique_idx[key])
+                else:
+                    idx = len(unique_details)
+                    key_to_unique_idx[key] = idx
+                    chunk_pos_to_unique_idx.append(idx)
+                    unique_details.append({
+                        "first_name": r.get("first_name", ""),
+                        "last_name": r.get("last_name", ""),
+                        "domain": r.get("domain", ""),
+                    })
+                    unique_keys.append(key)
+
+            saved = len(chunk) - len(unique_details)
+            if saved:
+                logger.debug(
+                    "Apollo batch: deduped chunk of %d to %d unique entries (saved %d credits)",
+                    len(chunk), len(unique_details), saved,
+                )
+
+            # --- Send only unique entries to the API ---
             try:
-                data, elapsed = await self._post("/people/bulk_match", {"details": details})
+                data, elapsed = await self._post(
+                    "/people/bulk_match", {"details": unique_details},
+                )
             except httpx.HTTPStatusError as exc:
                 error_resp = self._handle_error(exc)
                 error_resp.response_time_ms = 0
@@ -326,12 +360,14 @@ class ApolloProvider(BaseProvider):
 
             matches = data.get("matches", [])
 
+            # Parse unique results into a list indexed by unique position
+            unique_responses: list[ProviderResponse] = []
             for j, match in enumerate(matches):
                 status = match.get("status")
                 person = match.get("person")
 
                 if status == "no_match" or person is None:
-                    all_results.append(
+                    unique_responses.append(
                         ProviderResponse(
                             found=False,
                             data=match,
@@ -357,7 +393,7 @@ class ApolloProvider(BaseProvider):
                     confidence = None
                     credits = 0.0
 
-                all_results.append(
+                unique_responses.append(
                     ProviderResponse(
                         found=found,
                         data=match,
@@ -369,9 +405,9 @@ class ApolloProvider(BaseProvider):
                     )
                 )
 
-            # If the API returned fewer matches than we sent, pad with not-found
-            for _ in range(len(chunk) - len(matches)):
-                all_results.append(
+            # Pad if API returned fewer matches than unique entries sent
+            for _ in range(len(unique_details) - len(unique_responses)):
+                unique_responses.append(
                     ProviderResponse(
                         found=False,
                         data={},
@@ -379,6 +415,11 @@ class ApolloProvider(BaseProvider):
                         response_time_ms=elapsed,
                     )
                 )
+
+            # --- Map results back to all original rows (including duplicates) ---
+            for pos in range(len(chunk)):
+                unique_idx = chunk_pos_to_unique_idx[pos]
+                all_results.append(unique_responses[unique_idx])
 
         return all_results
 

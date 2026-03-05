@@ -346,12 +346,15 @@ class ContactOutProvider(BaseProvider):
         ]
 
     async def _poll_batch_job(self, job_id: str) -> list[ProviderResponse]:
-        """Poll ``GET /v2/people/linkedin/batch/<job_id>`` every 3 seconds
-        until the job reaches ``status == "DONE"``."""
+        """Poll ``GET /v2/people/linkedin/batch/<job_id>`` with adaptive
+        backoff (1s -> 5s max) until the job reaches ``status == "DONE"``."""
         poll_url = f"/v2/people/linkedin/batch/{job_id}"
+        poll_interval = 1.0   # start fast, back off exponentially
+        max_interval = 5.0
 
         while True:
-            await asyncio.sleep(3)
+            await asyncio.sleep(poll_interval)
+            poll_interval = min(poll_interval * 1.5, max_interval)
 
             try:
                 data, elapsed = await self._get(poll_url)

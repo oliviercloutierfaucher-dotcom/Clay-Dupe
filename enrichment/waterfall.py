@@ -99,6 +99,7 @@ class WaterfallOrchestrator:
         self,
         row: dict,
         campaign_id: Optional[str] = None,
+        _dedup_person: Optional[Person] = None,
     ) -> EnrichmentResult:
         """Run the full enrichment pipeline for a single input row.
 
@@ -109,6 +110,9 @@ class WaterfallOrchestrator:
             ``last_name``, ``company_domain``, ``company_name``, etc.).
         campaign_id:
             Optional campaign identifier for tracking and budgeting.
+        _dedup_person:
+            *Internal*. Pre-fetched cross-campaign dedup result from a
+            batch lookup.  When provided the per-row DB query is skipped.
 
         Returns
         -------
@@ -165,11 +169,15 @@ class WaterfallOrchestrator:
         # --- 1b. Cross-campaign dedup — check if this contact was already
         #         enriched in a different campaign. Reuses existing data
         #         without consuming additional credits.
+        #         When called from enrich_batch, _dedup_person is pre-fetched
+        #         in bulk so we skip the per-row DB query.
         if first_name and last_name and domain:
             try:
-                existing_person = await self.db.get_person_by_name_domain(
-                    first_name, last_name, domain,
-                )
+                existing_person = _dedup_person
+                if existing_person is None:
+                    existing_person = await self.db.get_person_by_name_domain(
+                        first_name, last_name, domain,
+                    )
                 if existing_person and existing_person.email:
                     logger.debug(
                         "Cross-campaign dedup hit: %s %s @ %s -> %s",
@@ -462,6 +470,22 @@ class WaterfallOrchestrator:
                 else None
             )
 
+            # --- Batch cross-campaign dedup for this chunk -------------------
+            dedup_map: dict[tuple[str, str, str], Person] = {}
+            try:
+                lookups: list[tuple[str, str, str]] = []
+                for r in chunk:
+                    nr = self._normalise_row(r)
+                    fn = nr.get("first_name", "")
+                    ln = nr.get("last_name", "")
+                    dom = nr.get("company_domain", "")
+                    if fn and ln and dom:
+                        lookups.append((fn, ln, dom))
+                if lookups:
+                    dedup_map = await self.db.get_persons_by_name_domain_batch(lookups)
+            except Exception:
+                logger.debug("Batch dedup pre-fetch failed (non-critical)")
+
             async def _worker(indexed_row: tuple[int, dict, Optional[str]]) -> EnrichmentResult:
                 nonlocal completed
                 index, row, row_id = indexed_row
@@ -473,8 +497,19 @@ class WaterfallOrchestrator:
                     except Exception:
                         logger.debug("Failed to mark row %s as processing", row_id)
 
+                # Resolve pre-fetched dedup person for this row
+                nr = self._normalise_row(row)
+                _dedup_key = (
+                    nr.get("first_name", "").strip().lower(),
+                    nr.get("last_name", "").strip().lower(),
+                    nr.get("company_domain", "").strip().lower(),
+                )
+                _preloaded = dedup_map.get(_dedup_key)
+
                 try:
-                    result = await self.enrich_single(row, campaign_id=campaign_id)
+                    result = await self.enrich_single(
+                        row, campaign_id=campaign_id, _dedup_person=_preloaded,
+                    )
                 except Exception:
                     logger.exception("Batch worker failed for row %d", index)
                     result = self._not_found_result(

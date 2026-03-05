@@ -294,20 +294,20 @@ def read_input_file(
             engine="python",
         )
 
-    # --- Clean up ----------------------------------------------------------
+    # --- Clean up (single pass per column) -----------------------------------
 
     # Strip whitespace from column names
     df.columns = [str(c).strip() for c in df.columns]
 
-    # Strip whitespace from all cells
-    df = df.apply(lambda col: col.map(lambda x: x.strip() if isinstance(x, str) else x))
-
-    # Replace null-like strings with NaN
-    df = df.apply(
-        lambda col: col.map(
-            lambda x: pd.NA if isinstance(x, str) and x.lower() in _NULL_STRINGS else x
-        )
-    )
+    # Strip whitespace and replace null-like strings in one pass per column
+    for col in df.columns:
+        series = df[col]
+        if series.dtype == object:
+            # .str accessor handles NaN gracefully (returns NaN)
+            stripped = series.str.strip()
+            df[col] = stripped.where(
+                ~stripped.str.lower().isin(_NULL_STRINGS), other=pd.NA,
+            )
 
     # Drop fully empty rows
     df = df.dropna(how="all")

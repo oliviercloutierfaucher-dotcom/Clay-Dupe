@@ -1,6 +1,7 @@
 """Cost tracking, ROI analysis, and waterfall optimization."""
 from __future__ import annotations
 
+import time
 from datetime import date, timedelta
 from typing import Optional, TYPE_CHECKING
 
@@ -14,14 +15,19 @@ from config.settings import ProviderName
 _PROVIDER_COST_PER_CREDIT: dict[ProviderName, float] = {
     ProviderName.APOLLO: 0.01,
     ProviderName.FINDYMAIL: 0.02,
-    ProviderName.ICYPEAS: 0.015,
+    ProviderName.ICYPEAS: 0.009,
     ProviderName.CONTACTOUT: 0.05,
+    ProviderName.DATAGMA: 0.005,
 }
 
 
 class CostTracker:
+    _WATERFALL_CACHE_TTL: float = 3600.0  # 1 hour in seconds
+
     def __init__(self, db: Database):
         self.db = db
+        self._waterfall_cache: Optional[list[ProviderName]] = None
+        self._waterfall_cache_time: float = 0.0
 
     async def get_provider_stats(self, provider: ProviderName, days: int = 30) -> dict:
         """Returns hit_rate, avg_cost_per_hit, total_credits, total_lookups, marginal_finds."""
@@ -93,6 +99,11 @@ class CostTracker:
                 result[provider.value] = stats
         return result
 
+    def invalidate_waterfall_cache(self):
+        """Manually invalidate the waterfall recommendation cache."""
+        self._waterfall_cache = None
+        self._waterfall_cache_time = 0.0
+
     async def get_waterfall_recommendation(self) -> Optional[list[ProviderName]]:
         """If reordering providers by (hit_rate/cost) would save >15%, return recommended order.
 
@@ -101,7 +112,20 @@ class CostTracker:
         higher-hit-rate providers are tried before expensive ones. We compare
         the estimated total cost of the current order against the optimal order;
         if savings exceed 15%, we return the new order.
+
+        Results are memoized for 1 hour to avoid repeated expensive aggregation.
         """
+        now = time.monotonic()
+        if (now - self._waterfall_cache_time) < self._WATERFALL_CACHE_TTL:
+            return self._waterfall_cache
+
+        result = await self._compute_waterfall_recommendation()
+        self._waterfall_cache = result
+        self._waterfall_cache_time = time.monotonic()
+        return result
+
+    async def _compute_waterfall_recommendation(self) -> Optional[list[ProviderName]]:
+        """Core logic for waterfall recommendation (uncached)."""
         stats = await self.get_all_provider_stats(days=30)
         if len(stats) < 2:
             return None

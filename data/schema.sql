@@ -190,6 +190,16 @@ CREATE INDEX IF NOT EXISTS ix_enrichment_results_found
 CREATE INDEX IF NOT EXISTS ix_enrichment_results_provider_found_at
     ON enrichment_results(source_provider, found, found_at);
 
+CREATE INDEX IF NOT EXISTS ix_enrichment_results_found_at
+    ON enrichment_results(found_at DESC);
+
+CREATE INDEX IF NOT EXISTS ix_enrichment_results_campaign_found
+    ON enrichment_results(campaign_id, found);
+
+CREATE INDEX IF NOT EXISTS ix_enrichment_results_person_position
+    ON enrichment_results(campaign_id, person_id, waterfall_position)
+    WHERE found = 1;
+
 -- ============================================================
 -- 5. campaign_rows
 -- ============================================================
@@ -231,6 +241,9 @@ CREATE TABLE IF NOT EXISTS credit_usage (
 
 CREATE INDEX IF NOT EXISTS ix_credit_usage_provider_date
     ON credit_usage(provider, date DESC);
+
+CREATE INDEX IF NOT EXISTS ix_credit_usage_date_provider
+    ON credit_usage(date DESC, provider);
 
 -- ============================================================
 -- 7. cache
