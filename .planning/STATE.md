@@ -1,63 +1,69 @@
+---
+gsd_state_version: 1.0
+milestone: v1.0
+milestone_name: Hardening & Scaling
+status: complete
+stopped_at: "v1.0 milestone archived — ready for /gsd:new-milestone"
+last_updated: "2026-03-07T23:00:00.000Z"
+last_activity: 2026-03-07 — v1.0 Hardening & Scaling milestone archived
+progress:
+  percent: 100
+---
+
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-03-04)
+See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Reliably find verified contact emails by cascading through multiple providers in cost-optimized order, with full cost tracking and caching to prevent wasted credits.
-**Current focus:** Phase 1 — Infrastructure Foundation
+**Current focus:** Between milestones — v1.0 shipped, planning next milestone
 
 ## Current Position
 
-Phase: 1 of 9 (Infrastructure Foundation)
-Plan: 0 of 3 in current phase
-Status: Ready to plan
-Last activity: 2026-03-04 — Roadmap created, ready to begin Phase 1 planning
+Phase: — (milestone complete)
+Plan: —
+Status: v1.0 shipped
+Last activity: 2026-03-07 — v1.0 Hardening & Scaling milestone archived
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 0
-- Average duration: —
-- Total execution time: 0 hours
+- Total plans completed: 28
+- Milestone duration: 3 days
 
 **By Phase:**
 
-| Phase | Plans | Total | Avg/Plan |
-|-------|-------|-------|----------|
-| - | - | - | - |
-
-**Recent Trend:**
-- Last 5 plans: —
-- Trend: —
-
-*Updated after each plan completion*
+| Phase | Plans | Status |
+|-------|-------|--------|
+| 1. Infrastructure Foundation | 3 | Complete |
+| 2. Exception & Response Hardening | 2 | Complete |
+| 3. Data Layer Hardening | 2 | Complete |
+| 4. Operational Hardening | 3 | Complete |
+| 5. I/O & Concurrency Performance | 3 | Complete |
+| 6. Cache & Database Performance | 3 | Complete |
+| 7. Campaign State Management | 3 | Complete |
+| 8. New Capabilities | 4 | Complete |
+| 9. Testing & Quality | 5 | Complete |
 
 ## Accumulated Context
 
 ### Decisions
 
-Decisions are logged in PROJECT.md Key Decisions table.
-Recent decisions affecting current work:
-
-- [Roadmap]: Build order is strictly dependency-ordered — infrastructure before security, security before performance, performance before capabilities, capabilities before testing
-- [Roadmap]: INFRA-01 (aiosqlite) and INFRA-02 (aiometer) moved to Phase 1 because all async refactoring in later phases depends on them
-- [Roadmap]: TEST-06 (Python >= 3.11 pin) placed in Phase 1 because asyncio.TaskGroup requires it and must be in place before any async work begins
+See PROJECT.md Key Decisions table.
 
 ### Pending Todos
 
-None yet.
+None.
 
 ### Blockers/Concerns
 
-- [Phase 4 planning]: A/B testing shadow-run pattern has MEDIUM confidence per research — a targeted research pass is recommended before Phase 8 planning begins
-- [Phase 1]: Schema migration tracking is not in scope but should be flagged during Phase 1 planning — action_logs and index additions in Phases 2-6 need a migration path for deployed databases
-- [Phase 5 planning]: Per-provider adaptive concurrency starting values need calibration against documented Apollo, Findymail, Icypeas, and ContactOut rate limits
+None — all v1.0 blockers resolved.
 
 ## Session Continuity
 
-Last session: 2026-03-04
-Stopped at: Roadmap created and files written — ready to begin /gsd:plan-phase 1
+Last session: 2026-03-07
+Stopped at: v1.0 milestone archived — ready for /gsd:new-milestone
 Resume file: None
