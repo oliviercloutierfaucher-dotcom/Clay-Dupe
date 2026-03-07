@@ -1,12 +1,23 @@
-# Clay-Dupe: Self-Hosted B2B Enrichment Platform
+# Clay-Dupe: Self-Hosted B2B Prospecting Platform
 
 ## What This Is
 
-A self-hosted alternative to Clay for B2B data enrichment. Uses a waterfall pattern to cascade through 5 API providers (Apollo, Icypeas, Findymail, Datagma, ContactOut) in cost-optimized order to find verified emails, phone numbers, and company data for niche businesses (A&D, medical device, niche industrial) with 1-15M EBITDA, 10-100 employees.
+A self-hosted alternative to Clay for end-to-end B2B prospecting. Sources companies from multiple channels (Apollo, Grata, Inven, Ocean.io, CSV imports), enriches contacts via 5-provider waterfall, checks Salesforce for duplicates, and generates AI-personalized outreach — all in one platform. Built for teams prospecting niche businesses (A&D, medical device, niche industrial) with 1-15M EBITDA, 10-100 employees.
 
 ## Core Value
 
-Reliably find verified contact emails for target companies by cascading through multiple providers in cost-optimized order, with full cost tracking and caching to prevent wasted credits.
+Source, enrich, and qualify target companies with maximum accuracy in a single platform — preventing duplicate outreach to Salesforce contacts and generating personalized emails ready for Outreach.io sequences.
+
+## Current Milestone: v2.0 Full Prospecting Platform
+
+**Goal:** Transform from enrichment-only tool into end-to-end prospecting platform with company sourcing, Salesforce dedup, and AI outreach.
+
+**Target features:**
+- Multi-source company sourcing (Apollo search, CSV import, manual add)
+- Salesforce integration for duplicate checking (flag + skip existing accounts)
+- AI-generated personalized cold emails using enriched company/contact data
+- Live API validation with real provider keys
+- Cloud deployment
 
 ## Requirements
 
@@ -37,17 +48,19 @@ Reliably find verified contact emails for target companies by cascading through 
 
 ### Active
 
+- [ ] Multi-source company sourcing (Apollo search, CSV, manual)
+- [ ] Salesforce integration — check accounts/contacts, flag + skip duplicates
+- [ ] AI-generated personalized cold emails from enriched data
 - [ ] Wire up real API keys and test with live data
-- [ ] Cloud deployment (Vercel, Railway, or VPS)
-- [ ] Provider cost comparison reports over time
-- [ ] Scheduled/recurring campaign runs
+- [ ] Cloud deployment (Railway, Fly.io, or VPS)
 
 ### Out of Scope
 
 - PostgreSQL migration — SQLite sufficient for team-size workloads
-- OAuth/SSO — internal team tool, API keys in .env sufficient
 - Mobile app — web UI via browser sufficient
-- AI-generated email personalization — out of scope for enrichment tool
+- Outreach.io API integration — v2.0 generates emails, manual copy to Outreach for now
+- React/Next.js frontend rewrite — Streamlit sufficient for v2.0, revisit in v3.0
+- Full Salesforce sync (bidirectional) — read-only check for v2.0
 
 ## Context
 
