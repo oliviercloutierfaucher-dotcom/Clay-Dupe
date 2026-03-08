@@ -74,7 +74,7 @@ else:
 # Filters
 # ---------------------------------------------------------------------------
 
-filter_cols = st.columns([2, 2, 2, 2, 3])
+filter_cols = st.columns([2, 2, 2, 2, 2, 3])
 with filter_cols[0]:
     f_status = st.selectbox(
         "Status", ["All", "new", "contacted", "skipped"], key="co_filter_status"
@@ -91,6 +91,10 @@ with filter_cols[2]:
 with filter_cols[3]:
     f_country = st.text_input("Country Code", value="", key="co_filter_country")
 with filter_cols[4]:
+    f_sf_status = st.selectbox(
+        "SF Status", ["All", "In SF", "Not in SF"], key="co_filter_sf_status"
+    )
+with filter_cols[5]:
     f_search = st.text_input(
         "Search (name/domain)", value="", key="co_filter_search",
     )
@@ -116,6 +120,12 @@ if f_search.strip():
         if (c.name and _search_lower in c.name.lower())
         or (c.domain and _search_lower in c.domain.lower())
     ]
+
+# Client-side SF status filter
+if f_sf_status == "In SF":
+    companies = [c for c in companies if c.sf_status == "in_sf"]
+elif f_sf_status == "Not in SF":
+    companies = [c for c in companies if c.sf_status is None]
 
 # ---------------------------------------------------------------------------
 # Load contacts for display in table
@@ -454,6 +464,12 @@ else:
             f"{contact.full_name or ''} ({contact.title or 'N/A'})"
             if contact else ""
         )
+        # SF Status: build link URL for companies in Salesforce
+        if c.sf_status == "in_sf" and c.sf_account_id and c.sf_instance_url:
+            sf_link = f"https://{c.sf_instance_url}/{c.sf_account_id}"
+        else:
+            sf_link = None
+
         df_rows.append({
             "Name": c.name or "",
             "Domain": c.domain or "",
@@ -461,12 +477,22 @@ else:
             "Employees": c.employee_count or "",
             "Country": c.country or "",
             "ICP Score": c.icp_score if c.icp_score is not None else "",
+            "SF Status": sf_link if sf_link else "",
             "Source": c.source_type or "",
             "Status": c.status or "new",
             "Contact": contact_display,
         })
 
     df = pd.DataFrame(df_rows)
+
+    # Column config: make SF Status a clickable link
+    column_config = {
+        "SF Status": st.column_config.LinkColumn(
+            "SF Status",
+            display_text="In SF",
+            help="Click to open Salesforce Account record",
+        ),
+    }
 
     event = st.dataframe(
         df,
@@ -475,6 +501,7 @@ else:
         hide_index=True,
         on_select="rerun",
         selection_mode="multi-row",
+        column_config=column_config,
     )
 
     selected_rows = event.selection.rows if event.selection else []
@@ -508,6 +535,39 @@ else:
                     updated += 1
             st.success(f"Updated status to **{new_status}** for {updated} companies.")
             st.rerun()
+
+        # ---- Enrich Anyway (SF override) ----------------------------------
+        sf_selected = [
+            companies[idx] for idx in selected_rows
+            if idx < len(companies) and companies[idx].sf_status == "in_sf"
+        ]
+        if sf_selected:
+            if st.button(
+                f"Enrich Anyway ({len(sf_selected)} in SF)",
+                icon=":material/bolt:",
+                key="enrich_anyway_sf",
+                type="secondary",
+            ):
+                # Store force-enrich domains in session state for the waterfall
+                force_domains = {
+                    c.domain for c in sf_selected if c.domain
+                }
+                existing = st.session_state.get("force_enrich_domains", set())
+                st.session_state["force_enrich_domains"] = existing | force_domains
+                # Queue contacts for enrichment (same pattern as contact discovery)
+                enrich_ids = []
+                for c in sf_selected:
+                    contact = contacts_map.get(c.id)
+                    if contact:
+                        enrich_ids.append(contact.id)
+                if enrich_ids:
+                    st.session_state["enrich_person_ids"] = enrich_ids
+                    st.switch_page("pages/enrich.py")
+                else:
+                    st.info(
+                        "Selected SF companies have no contacts yet. "
+                        "Run contact discovery first, then enrich."
+                    )
 
     # ---------------------------------------------------------------------------
     # Single Company Contact Discovery
