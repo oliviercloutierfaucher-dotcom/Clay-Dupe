@@ -1,17 +1,17 @@
 # Project Research Summary
 
-**Project:** Clay-Dupe — B2B Waterfall Enrichment Platform
-**Domain:** Python async data enrichment pipeline — hardening, performance, and scaling
-**Researched:** 2026-03-04
-**Confidence:** HIGH
+**Project:** Clay-Dupe v2.0 -- Salesforce Integration, AI Email Generation, Company Sourcing
+**Domain:** B2B prospecting platform (extending existing enrichment engine to end-to-end pipeline)
+**Researched:** 2026-03-07
+**Confidence:** MEDIUM-HIGH
 
 ## Executive Summary
 
-This is a subsequent milestone for a functioning self-hosted B2B waterfall enrichment platform. The core pipeline (4-provider cascade, budget limits, circuit breakers, SQLite persistence, Streamlit UI, CSV import/export) is already deployed. The research consensus is unambiguous: the platform has correctness defects that must be fixed before any performance or capability work is layered on top. Specifically, non-atomic state writes, bare exception swallowing, and SQL injection vulnerabilities are live production risks that corrupt data quality and credit tracking. These are not technical debt to schedule later — they are blocking issues because new features (pause/resume, cross-campaign dedup) directly depend on a reliable state model.
+This is a v2.0 expansion of a production-validated B2B enrichment platform (14,586 LOC, 277 tests, 5-provider waterfall). The goal is to transform it from enrichment-only into a full prospecting pipeline: source companies, check Salesforce for duplicates before spending credits, enrich contacts, generate personalized cold emails, and export for Outreach.io. The existing async architecture (httpx, aiosqlite, aiometer, Streamlit, Typer) is solid and extensible. Only two new dependencies are needed: `simple-salesforce` for CRM dedup and `anthropic` SDK for AI email generation. Jinja2 comes free via Streamlit.
 
-The recommended approach is a strict four-phase build order derived from dependency analysis: (1) security and hardening — fix the foundation so all upstream work is trustworthy; (2) performance and scaling — shared HTTP connection pool, SQLite indexing and WAL management, and chunked async batch processing; (3) new capabilities — audit trail, pause/resume, cross-campaign deduplication; (4) differentiators — provider A/B testing framework and adaptive concurrency. This order is non-negotiable: audit trails require parameterized queries, pause/resume requires atomic state updates, A/B testing requires a stable audit trail. Skipping phases or reordering creates compound risk.
+The recommended approach is a three-phase build following the data flow: Sourcing first (creates the input data), Salesforce dedup second (gates the enrichment), AI email generation last (consumes enriched output). Each phase is independently deployable and testable with real data. Architecture research confirms three clean integration patterns: upstream sourcing, pre-enrichment gate, and post-enrichment processor -- none of which require modifying the core waterfall logic beyond a single injection point for the SF checker.
 
-The primary risks are implementation completeness traps: changes that appear done but leave the core problem intact. Exception handlers narrowed to specific types but still silent, connection pool code moved to class level but still per-instantiation, batch chunking code that sequences chunks but materializes all coroutine objects immediately — each of these is a documented failure mode. The prevention strategy is explicit verification gates per phase, not code review alone.
+The primary risks are: (1) Salesforce OAuth token lifecycle is more complex than it appears -- tokens rotate on refresh since Spring 2024 and must be persisted immediately, (2) AI-generated emails hallucinate company facts ~15% of the time, which is catastrophic for B2B credibility -- constrained prompts and mandatory human review are non-negotiable, (3) SQLite write contention will emerge when multiple v2.0 features write concurrently -- a write queue must be implemented before adding new write paths. All three risks have well-documented prevention strategies detailed in PITFALLS.md.
 
 ---
 
@@ -19,190 +19,147 @@ The primary risks are implementation completeness traps: changes that appear don
 
 ### Recommended Stack
 
-The existing stack (Python 3.x, httpx 0.27+, Pydantic v2, SQLite WAL, Streamlit, pytest 8.0+, pytest-asyncio 0.23+) remains unchanged. Four targeted additions address the documented pain points without architectural disruption.
+The v2.0 stack adds only two direct dependencies to the existing codebase, keeping the footprint minimal.
 
-**Core technologies (new additions only):**
-- `aiometer 1.0.0`: per-provider concurrency + per-second rate limiting — the only stdlib-free library that handles both axes simultaneously; `asyncio.Semaphore` alone cannot enforce per-second limits, which is what provider APIs enforce
-- `tenacity 9.1.4`: consistent async retry with exponential backoff across all 4 providers — replaces ad-hoc inconsistent retry loops that currently exist in some providers but not others
-- `aiosqlite 0.22.1`: async bridge for SQLite — the existing `sqlite3` usage blocks the event loop on every query during concurrent enrichment; this is the canonical fix, not `run_in_executor` wrapping
-- `respx 0.22.0`: httpx-specific mock library for tests — enables testing provider error handling (429, 500, malformed JSON) and concurrent DB access without real API calls
-- `pytest-asyncio 1.3.0` (upgrade from 0.23+): session-scoped fixture fix; required for correct aiosqlite concurrent access testing
+**Core technologies:**
+- **simple-salesforce >=1.12.9**: Salesforce REST API client for SOQL dedup queries -- most mature Python SF library (5K+ stars), handles OAuth and session management out of the box. Synchronous (uses `requests`), but acceptable since SF checks are batch pre-enrichment, not per-row. Isolate from httpx stack.
+- **anthropic >=0.84.0**: Claude API SDK for personalized email generation -- uses httpx internally (aligns with existing stack), Pydantic v2 typed responses. Claude 3.5 Haiku at ~$0.0005/email (~$5/month for 10K contacts). Chosen over OpenAI for lower hallucination rates on factual company data, which is critical for B2B outreach referencing real enrichment data.
+- **jinja2 >=3.1**: Email template rendering -- already installed as Streamlit transitive dependency. Separates email structure (user-editable templates) from AI personalization.
 
-**Critical action required:** Pin Python to `>= 3.11` to unlock `asyncio.TaskGroup` without a backport. The codebase currently has no explicit Python version lock — this must be added before any async refactoring.
+**Critical "do not add" list:** langchain (overkill), celery/redis (unnecessary for team-scale), salesforce-bulk (we only read hundreds of records), requests explicitly (let it come only via simple-salesforce).
+
+**Research discrepancy noted:** FEATURES.md and ARCHITECTURE.md reference OpenAI/GPT-4o-mini for email generation, while STACK.md recommends Anthropic/Claude after deeper analysis. **Recommendation: use Anthropic SDK with Claude 3.5 Haiku.** Rationale: lower hallucination on factual data, httpx alignment, comparable cost ($0.0005 vs $0.0004/email). Abstract the LLM interface so swapping is a config change if needed.
 
 See `.planning/research/STACK.md` for full installation instructions, version compatibility matrix, and alternatives considered.
 
 ### Expected Features
 
-The four milestone capabilities (pause/resume, cross-campaign dedup, audit trail, provider A/B testing) all have direct feature dependencies that dictate build order.
+**Must have (table stakes):**
+- SF account lookup by domain + contact lookup by email (batch SOQL with IN clauses)
+- Bulk pre-enrichment SF dedup with skip/flag/disabled modes
+- SF duplicate flags visible in UI (color-coded status column)
+- SF connection settings in Streamlit settings page
+- Apollo company search with ICP filters exposed in UI
+- Company-to-contact discovery (Apollo search_people, FREE)
+- AI-personalized email generation from enriched data with editable templates
+- Batch email generation with rate limiting
+- Email preview/edit in UI before export
+- Outreach.io-ready CSV export with email columns
 
-**Must have in this milestone (P1 — correctness and named scope):**
-- Atomic state updates — foundational; pause/resume and dedup both have race conditions without this
-- Pause and resume batch enrichment — checkpoint-per-row model with campaign-level pause flag
-- Cross-campaign contact deduplication — global contacts lookup before waterfall dispatch; requires atomic writes
-- Audit trail (per-enrichment-call log) — append-only `action_logs` table; also the data source for A/B analysis
-- Input validation before API calls — Pydantic v2 field validators on domain/email/LinkedIn URL fields; prevents credit waste on invalid inputs
-- Chunked async batch processing — explicit chunk iteration, not `asyncio.gather()` on full CSV; required for 500+ row support
-- Cache indexing and active eviction — prevents performance degradation as the cache table grows over months
+**Should have (differentiators):**
+- Pre-enrichment SF dedup as cost-saving mechanism (~$150 saved per 10K run at 30% duplicate rate)
+- ICP scoring from enriched company data (rule-based, 0-100 score)
+- Micro-campaign auto-segmentation (10-20 person groups by industry/size)
+- Confidence-aware email personalization (adjust specificity based on enrichment confidence)
+- End-to-end cost-per-lead tracking
 
-**Should have after P1 validates (P2 — differentiators):**
-- Provider A/B testing framework — requires stable audit trail; shadow-run or split-group mode; statistical significance gating
-- Adaptive concurrency limits — per-provider semaphores that back off on 429 and recover over time
-- API key rotation without restart — low complexity; add after core changes settle
-- Per-domain SMTP verification rate limiting — cap probing at 3 attempts per domain per hour
+**Defer to v3.0+:**
+- Bidirectional Salesforce sync (write-back) -- dangerous scope increase, requires field mapping UI
+- Multi-LLM provider support -- abstract the interface but ship with one provider
+- Email sending from platform -- stay focused on generation, let Outreach handle deliverability
+- Additional sourcing providers (Grata, Inven) -- Apollo + CSV covers 90%+ of use cases
+- Real-time Salesforce webhooks -- batch check before each run is sufficient
 
-**Defer (P3 — out of this milestone):**
-- Row-level confidence aggregation across providers — needs audit data to accumulate first
-- Scheduled/recurring campaign runs — requires job scheduler; scope creep risk
-- Multi-tenant isolation — only relevant if the tool is shared across teams
-
-**Anti-features confirmed out of scope:** PostgreSQL migration (no gain at team scale after proper indexing), OAuth/SSO (internal team tool), AI email personalization (wrong tool), additional provider integrations (use A/B testing to validate existing providers first).
-
-See `.planning/research/FEATURES.md` for full competitor analysis and feature dependency graph.
+See `.planning/research/FEATURES.md` for full competitor analysis, dependency graph, and implementation cost estimates.
 
 ### Architecture Approach
 
-The existing 5-layer architecture (Presentation, Enrichment Pipeline, Quality and Cost Control, API Providers, Data Access) is sound and is not being restructured. All milestone changes inject into existing files and add focused new modules within the existing directory structure. No new top-level folders are required — this minimizes regression risk.
+Three new top-level packages (`integrations/`, `outreach/`, `sourcing/`) plug into the existing architecture at distinct pipeline stages. The Salesforce checker is NOT a BaseProvider -- it is a pre-enrichment gate injected as an optional dependency into WaterfallOrchestrator. The email generator is a post-enrichment processor that reads from companies/people tables and writes to its own email_drafts table. Company sourcing wraps existing Apollo methods with ICP filtering and persists to existing tables. Each component owns its own external API connection.
 
-**Key architectural changes per layer:**
-1. `providers/http_pool.py` (NEW) — shared `httpx.AsyncClient` singleton; injected into all 4 providers at construction; lifecycle managed at app startup/shutdown
-2. `providers/base.py` + each provider (HARDEN) — `InputValidator` helper at method entry; typed exception boundaries (`httpx.TimeoutException`, `httpx.HTTPStatusError`, `httpx.RequestError`); `.get()` fallbacks on all response parsing
-3. `enrichment/waterfall.py` (PERF + SCALE) — chunk iteration (not `gather()`), adaptive concurrency per provider, pause/resume state machine polling campaign table between chunks
-4. `data/database.py` (HARDEN) — parameterized queries throughout; `action_logs` table (audit trail); composite indexes on cache, campaign_rows, enrichment_results, credit_usage
-5. `cost/budget.py` (HARDEN) — atomic `BEGIN IMMEDIATE` transaction wrapping budget check and credit deduction
-6. `cost/cache.py` (SCALE) — active eviction coroutine; runs pre-batch or on schedule; bounded by row-count cap per pass
-7. `cost/tracker.py` (HARDEN) — audit trail writes inside same transaction as credit deduction
+**Major components:**
+1. **SourcingPipeline** (`sourcing/`) -- Apollo search, CSV import, manual add. Produces Company/Person records. Wraps existing provider methods.
+2. **SalesforceChecker** (`integrations/`) -- Read-only SOQL queries for account/contact dedup. Batch pre-fetch with in-memory cache. Configurable skip/flag/off strategy per campaign.
+3. **EmailGenerator** (`outreach/`) -- Anthropic AsyncClient for personalized cold emails. Jinja2 templates for structure. Rate-limited via aiometer. Results cached in email_drafts table.
 
-**Build order is strictly dependency-ordered:** SQL injection and bare exceptions must be fixed before building the audit trail on top. Shared HTTP pool requires stable providers. Chunked batch processing requires stable concurrency management. Pause/resume requires chunked batch. A/B testing requires stable audit trail.
+**Schema changes:** New `email_drafts` table, new `salesforce_config` table, SF status columns on `people` and `companies` tables.
 
-See `.planning/research/ARCHITECTURE.md` for full data flow diagrams, per-pattern code examples, and integration point table.
+**Estimated new code:** ~2,200-3,300 LOC (15-23% of v1.0 codebase), plus ~500-800 LOC tests.
+
+See `.planning/research/ARCHITECTURE.md` for full data flow diagrams, component designs, and anti-patterns to avoid.
 
 ### Critical Pitfalls
 
-1. **Exception refactor that still swallows errors** — Narrowing exception types while keeping silent handler bodies is the most common failure mode in this refactor. Every handler must either log with context (provider name, input, response snippet), re-raise, or return a typed `ProviderResult(success=False, reason=...)`. Grep for `except` clauses after refactoring and verify each emits a log line.
+1. **Salesforce OAuth token rotation** -- Since Spring 2024, SF issues NEW refresh tokens on each refresh, revoking the old one. Must persist new refresh token immediately after each refresh, before using the access token. Store tokens encrypted in SQLite, not in .env or session state.
+2. **AI email hallucination** -- LLMs fabricate company facts ~15% of the time. Constrain prompts to ONLY reference provided data fields, use temperature 0.3-0.5, add post-generation validation that checks every proper noun against input data. Never skip human review.
+3. **SQLite write contention** -- v2.0 introduces 4+ concurrent write paths. Implement a single async write queue before adding new features. Set busy_timeout to 5000ms minimum. Keep write transactions short.
+4. **SF dedup false negatives** -- Exact-match-only catches <60% of real duplicates. Match on multiple fields with scoring: domain (primary), normalized company name (fuzzy 85%), email, LinkedIn URL. Surface uncertain matches (50-85% score) for human review.
+5. **Streamlit OAuth callback failure** -- Streamlit cannot handle OAuth redirects natively. Use JWT Bearer flow (no redirect) or a separate FastAPI endpoint for the OAuth dance. Do NOT implement OAuth callback inside Streamlit.
+6. **Company sourcing duplicates** -- Multi-source ingestion creates duplicate company records without ingestion-time dedup. Use normalized domain as unique constraint, fuzzy name match as secondary.
 
-2. **Non-atomic budget check and deduction** — Under concurrent enrichment, two Streamlit sessions can both pass the budget check before either deducts. The fix is `BEGIN IMMEDIATE` transaction (not application-level locking) — WAL mode concurrent reads make read-check followed by separate write inherently racy. Verify with a concurrent test that spins two batch jobs against the same budget limit.
-
-3. **Non-atomic campaign state on crash** — Cache write, campaign row update, and credit deduction are three separate DB operations. Crash between them leaves orphaned rows that appear enriched in cache but pending in the campaign, causing double-spend on resume. Wrap all three in a single `BEGIN / COMMIT` transaction.
-
-4. **asyncio.gather() materializing full batch** — Even with a semaphore, calling `gather(*[enrich(row) for row in all_rows])` creates all coroutine objects upfront. 2,000 rows = 2,000 simultaneous coroutine objects. The fix is sequential iteration over explicit chunks, with `gather()` only within each chunk.
-
-5. **Completion traps** — Changes that appear done but are not: connection pool moved to class level but class is instantiated per-request; cache index added but `EXPLAIN QUERY PLAN` still shows full scan; WAL mode enabled but no checkpoint scheduling; budget check adjacent to deduction in code but not inside a shared transaction. Each of these requires explicit verification, not just code review.
-
-See `.planning/research/PITFALLS.md` for full technical debt table, integration gotchas per provider, and recovery strategies.
+See `.planning/research/PITFALLS.md` for full technical debt patterns, security mistakes, UX pitfalls, and recovery strategies.
 
 ---
 
 ## Implications for Roadmap
 
-Research strongly supports a 4-phase build order. This is not a preference — it is derived from hard dependencies between components.
+Based on research, suggested phase structure:
 
-### Phase 1: Security and Hardening
+### Phase 1: Company Sourcing + Infrastructure Prep
 
-**Rationale:** Three of the eight documented CONCERNS.md issues are live correctness defects (SQL injection, bare exceptions, non-atomic writes) that corrupt the data quality and credit tracking that all other features rely on. No new feature should be built on top of a broken state model. This phase has no dependencies on other milestone work — it is pure surgical fixes to existing code.
+**Rationale:** Creates the input data that everything else depends on. Lowest technical risk -- wraps existing Apollo methods. Also the right time to implement the SQLite write queue before adding more write-heavy features.
 
-**Delivers:** A trustworthy data layer and provider layer. Parameterized queries eliminate SQL injection. Typed exceptions make failure modes visible. Atomic transactions prevent orphaned rows and budget overruns.
+**Delivers:** Apollo company search UI with ICP filters, company-to-contact discovery, CSV import for companies, manual add, source tracking. Write queue infrastructure.
 
-**Addresses (from FEATURES.md P1):**
-- Atomic state updates
-- Input validation before API calls (Pydantic field validators)
+**Addresses:** Company sourcing table stakes, source tracking, company dedup at ingestion
 
-**Avoids (from PITFALLS.md):**
-- Bare exception refactor that still swallows errors (Pitfall 1)
-- Non-atomic budget check race condition (Pitfall 2)
-- Non-atomic campaign state on crash (Pitfall 3)
-- SQL injection in database.py (Security section)
-- SMTP verification spam detection (per-domain rate limiting added here)
+**Avoids:** Pitfall 7 (company sourcing duplicates) -- build ingestion-time dedup from day one. Pitfall 2 (SQLite write contention) -- implement write queue before adding SF and email write paths.
 
-**Research flag:** Standard patterns — no additional research needed. Parameterized SQL, typed exceptions, `BEGIN IMMEDIATE` transactions, and Pydantic validators are well-documented.
+**Estimated scope:** ~5-8 new files, `sourcing/` package, UI page, minimal modification to existing files.
 
----
+### Phase 2: Salesforce Integration
 
-### Phase 2: Performance and Scaling
+**Rationale:** Requires companies/people in DB (Phase 1 provides). Must be integrated before email generation so users know which contacts are SF duplicates before generating emails. Core cost-saving value proposition.
 
-**Rationale:** After Phase 1 establishes a reliable foundation, the next bottlenecks are I/O and memory. Unshared HTTP clients pay TLS handshake on every call. The cache table will become a full-scan bottleneck at ~10,000 rows. Unmanaged WAL files degrade performance under sustained batch loads. These are all independent fixes that can land together.
+**Delivers:** SF connection/auth with encrypted token storage, batch SOQL dedup, skip/flag/disabled modes, SF status in enrich UI, settings page integration.
 
-**Delivers:** Faster per-request latency (connection reuse), bounded memory on large CSVs (chunked batch), stable query performance as the cache grows (indexes + eviction), and controlled provider throughput (per-provider semaphores replacing global hardcoded limit).
+**Uses:** simple-salesforce, `integrations/` package
 
-**Addresses (from FEATURES.md P1):**
-- Chunked async batch processing
-- Cache indexing and automatic eviction
+**Implements:** Pre-Enrichment Gate pattern (SalesforceChecker injected into WaterfallOrchestrator)
 
-**Uses (from STACK.md):**
-- `aiometer 1.0.0` for per-provider concurrency + per-second rate limiting
-- `aiosqlite 0.22.1` for non-blocking SQLite from async context
-- SQLite PRAGMA tuning (WAL + synchronous = NORMAL + mmap + cache_size)
-- `providers/http_pool.py` shared client pattern
+**Avoids:** Pitfall 1 (OAuth token lifecycle) -- build token persistence and health checks from the start. Pitfall 4 (dedup false negatives) -- multi-field matching with scoring. Pitfall 5 (Streamlit OAuth) -- use JWT Bearer or separate endpoint.
 
-**Avoids (from PITFALLS.md):**
-- asyncio.gather() materializing full batch (Pitfall 4)
-- Per-instance httpx.AsyncClient (Pitfall 5)
-- Fixed concurrency causing 429 storms (Pitfall 6)
-- WAL file unbounded growth (Pitfall 7)
-- Cache table missing index (Pitfall 8)
+**Estimated scope:** ~4-5 new files, modifications to waterfall.py, settings.py, models.py, schema.sql, database.py, 2 UI pages.
 
-**Research flag:** Standard patterns — chunking, connection pooling, and SQLite indexing are well-documented. No additional research needed.
+### Phase 3: AI Email Generation + Export
 
----
+**Rationale:** Consumes output of both sourcing and enrichment. Depends on SF status to avoid generating emails for duplicates. Final piece of the end-to-end pipeline.
 
-### Phase 3: New Capabilities
+**Delivers:** Anthropic-powered email generation, Jinja2 template system, batch generation with aiometer rate limiting, email preview/edit in UI, Outreach.io CSV export with email columns.
 
-**Rationale:** Pause/resume, cross-campaign dedup, and audit trail all depend on the atomic state foundation from Phase 1 and the chunked batch infrastructure from Phase 2. They cannot be built correctly before those phases complete. This phase delivers the four capabilities named as Active in PROJECT.md.
+**Uses:** anthropic SDK, jinja2, `outreach/` package
 
-**Delivers:** Full pause/resume with checkpoint-per-row semantics. Cross-campaign deduplication that prevents double-spend on shared contacts. Per-call audit trail that is the data source for billing disputes and A/B analysis. Together these make the platform operationally mature.
+**Implements:** Post-Enrichment Processor pattern (EmailGenerator reads enriched data, writes to email_drafts)
 
-**Addresses (from FEATURES.md P1):**
-- Pause and resume batch enrichment
-- Cross-campaign contact deduplication
-- Audit trail (per-enrichment-call log)
+**Avoids:** Pitfall 3 (AI hallucination) -- constrained prompts, fact anchoring, mandatory human review. Pitfall 6 (spam triggers) -- banned phrases, short emails, spam score heuristic.
 
-**Implements (from ARCHITECTURE.md):**
-- `action_logs` table with AuditLogger writing inside same transaction as credit deduction
-- Campaign pause/resume state machine in WaterfallOrchestrator polling between chunks
-- Global contacts dedup check before waterfall entry point, with atomic write on match
+**Estimated scope:** ~5-6 new files, new UI page, schema changes, export extension.
 
-**Avoids (from PITFALLS.md):**
-- No deduplication leading to double-spend (Performance Traps table)
-- Pattern duplicates causing conflicting confidence scores (Pattern Deduplication)
+### Phase 4: Pipeline Orchestration + Differentiators
 
-**Research flag:** Pause/resume and dedup patterns are well-documented (job queue checkpointing, CRM dedup literature — HIGH confidence per FEATURES.md). Provider A/B testing shadow-run mode has less public documentation — if A/B analysis is moved to this phase, mark for deeper research.
+**Rationale:** Capstone phase -- wire all components into the end-to-end "source -> dedup -> enrich -> email -> export" flow. Add differentiator features once core pipeline is validated with real data.
 
----
+**Delivers:** End-to-end pipeline orchestration, ICP scoring, micro-campaign segmentation, confidence-aware email tone, cost-per-lead tracking.
 
-### Phase 4: Differentiators
+**Addresses:** All differentiator features from FEATURES.md
 
-**Rationale:** Provider A/B testing is the highest-value differentiator but requires a stable audit trail to be meaningful. Without accurate per-call logs, there is no data to analyze. This phase also adds the remaining P2 items (adaptive concurrency, API key rotation) that enhance the platform but are not required for correctness.
-
-**Delivers:** Data-driven waterfall ordering via real per-provider hit rate analysis for the team's specific ICP. Adaptive concurrency that learns from live 429 signals rather than static configuration. API key rotation without service restart.
-
-**Addresses (from FEATURES.md P2):**
-- Provider A/B testing framework (shadow mode or split-group mode)
-- Adaptive concurrency limits (per-provider semaphore with backoff and recovery)
-- API key rotation without restart
-
-**Uses (from STACK.md):**
-- `tenacity 9.1.4` for consistent async retry; adaptive concurrency feedback loop built on top
-
-**Research flag:** Provider A/B testing for data quality pipelines has limited public documentation (MEDIUM confidence per FEATURES.md). Specifically: statistical significance thresholds for hit rate comparison and shadow-run implementation pattern in a waterfall context need deeper research during planning for this phase.
-
----
+**Note:** Consider splitting into two sub-phases: orchestration first (critical), then differentiators (iterative based on user feedback).
 
 ### Phase Ordering Rationale
 
-- **Correctness before performance:** SQL injection and non-atomic writes are live defects; performance work built on a broken data layer compounds the defects
-- **Foundation before features:** Pause/resume and dedup both have race conditions that only disappear after Phase 1's atomic transactions are in place
-- **Infrastructure before analytics:** A/B testing is meaningless without the audit trail data it analyzes; the audit trail is meaningless if the credit deductions it records are non-atomic
-- **No phase can be skipped or reordered:** Each phase's deliverables are explicit prerequisites for the next phase's correctness — this is not a preference, it is a dependency graph
+- **Sourcing before Salesforce:** SF dedup needs data to check against. Without sourced companies, there is nothing to query.
+- **Salesforce before AI Email:** Generating emails for SF duplicates wastes LLM tokens and creates confusing output. Users must see dedup status first.
+- **Each phase independently deployable:** Phase 1 is useful alone (better company discovery). Phase 2 adds value without Phase 3 (credit savings from dedup). This enables real-data validation between phases.
+- **Infrastructure (write queue) in Phase 1:** Prevents the write contention pitfall from manifesting when Phases 2-3 add concurrent write paths.
 
 ### Research Flags
 
-Phases needing deeper research during planning:
-- **Phase 4 (Provider A/B Testing):** Shadow-run implementation pattern in a waterfall enrichment context has limited public documentation. Needs research into: statistical significance thresholds, shadow-run vs. split-group tradeoffs, result comparison methodology. FEATURES.md rates this MEDIUM confidence.
+Phases likely needing deeper research during planning:
+- **Phase 2 (Salesforce):** OAuth flow choice (JWT Bearer vs username/password vs OAuth callback) depends on customer's Salesforce edition and admin access. Fuzzy dedup matching thresholds need calibration with real SF data.
+- **Phase 3 (AI Email):** Prompt engineering for cold emails is an active field with rapidly changing best practices. Template design needs A/B testing with real prospect data. Spam scoring heuristics need validation against current Gmail/Outlook filters.
 
-Phases with standard, well-documented patterns (skip research-phase):
-- **Phase 1 (Security and Hardening):** Parameterized SQL, typed exception handling, `BEGIN IMMEDIATE` atomicity, and Pydantic validators are well-documented. HIGH confidence.
-- **Phase 2 (Performance and Scaling):** Connection pooling, asyncio chunking, SQLite indexing, and WAL checkpoint management are well-documented. HIGH confidence.
-- **Phase 3 (New Capabilities):** Checkpoint-based pause/resume and CRM dedup patterns are well-documented. HIGH confidence except for any A/B components if they slip into this phase.
+Phases with standard patterns (skip research-phase):
+- **Phase 1 (Company Sourcing):** Wraps existing Apollo API methods. Well-documented patterns. CSV import already proven in v1.0.
+- **Phase 4 (Pipeline Orchestration):** Application-level wiring of completed components. No novel technical challenges.
 
 ---
 
@@ -210,52 +167,46 @@ Phases with standard, well-documented patterns (skip research-phase):
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | HIGH | All versions verified via PyPI; patterns verified via official httpx, asyncio, and aiosqlite docs; alternatives explicitly evaluated |
-| Features | MEDIUM | Table stakes and P1 features verified against competitor analysis and CRM dedup literature; provider A/B testing shadow-run patterns have limited public precedent in waterfall enrichment context |
-| Architecture | HIGH | Derived from direct codebase analysis of existing ARCHITECTURE.md and CONCERNS.md; not inferred from generic patterns |
-| Pitfalls | HIGH | All 8 critical pitfalls grounded in documented CONCERNS.md issues; verified against Python async/SQLite/httpx official sources |
+| Stack | HIGH | Only 2 new dependencies, both mature and well-documented. Version compatibility verified against existing httpx/Pydantic stack. |
+| Features | MEDIUM-HIGH | Table stakes well-defined from competitor analysis (Clay, Apollo). Differentiators need real-user validation after MVP. |
+| Architecture | HIGH | Integration points derived from direct codebase analysis. Three clean patterns (upstream, gate, processor) with no waterfall restructuring. |
+| Pitfalls | MEDIUM-HIGH | Salesforce and SQLite pitfalls well-documented with multiple sources. AI email pitfalls based on 2025-2026 data, still evolving as spam filters adapt. |
 
-**Overall confidence:** HIGH
+**Overall confidence:** MEDIUM-HIGH
 
 ### Gaps to Address
 
-- **Python version lock:** The codebase has no explicit `python_requires` specifier. Must pin to `>= 3.11` before Phase 2 to enable `asyncio.TaskGroup` without a backport. This is a blocking action item before implementation begins.
-- **Provider A/B testing implementation pattern:** MEDIUM confidence only. Shadow-run mode for waterfall enrichment is not a well-documented pattern. When Phase 4 is planned, run a targeted research pass on: (a) shadow-run vs. split-group methodology, (b) minimum sample size for statistical significance on hit rates, (c) how to surface results in the Streamlit UI without overwhelming the user.
-- **Schema migration tracking:** PITFALLS.md flags the absence of schema migration tracking as a security mistake. The proposed `action_logs` and index additions in Phase 1-3 will need a migration path for existing deployed databases. A schema version table and programmatic migration at startup should be added — this is not currently in scope but should be flagged during Phase 1 planning.
-- **Adaptive concurrency calibration:** STACK.md suggests `max_concurrent_requests=5` is safe with the recommended pool limits, but per-provider calibration values are not specified. Phase 4 planning should include a research pass on documented rate limits for Apollo, Findymail, Icypeas, and ContactOut to set sensible adaptive concurrency starting values.
+- **LLM provider alignment:** STACK.md recommends Claude, FEATURES.md/ARCHITECTURE.md reference OpenAI. Needs final decision and codebase alignment during Phase 3 planning. Recommendation: Claude (Anthropic SDK), but abstract the interface for future flexibility.
+- **Salesforce edition requirements:** OAuth flow options depend on which SF edition the customer uses. JWT Bearer requires admin-level Connected App setup. Username/password flow is simpler but less secure. Needs discovery during Phase 2 planning with the actual SF org.
+- **Fuzzy dedup thresholds:** Company name matching threshold (85%? 90%?) needs calibration against real Salesforce data. Plan for an adjustment period after initial deployment.
+- **Email quality benchmarks:** No baseline for "good enough" AI-generated cold email quality specific to the target ICP (A&D, medical, industrial). Needs 3-5 real-world email generation tests before finalizing templates in Phase 3.
+- **Write queue architecture:** PITFALLS.md flags SQLite write contention but the specific write queue pattern (asyncio.Queue with single writer coroutine) needs validation against the existing aiosqlite usage patterns in database.py. Address in Phase 1.
 
 ---
 
 ## Sources
 
 ### Primary (HIGH confidence)
-- `.planning/codebase/ARCHITECTURE.md` — direct codebase analysis; component responsibilities and existing patterns
-- `.planning/codebase/CONCERNS.md` — documented defects with file locations; primary driver for Phase 1 scope
-- `.planning/PROJECT.md` — milestone scope, constraints, and Active feature list
-- [httpx official docs — Resource Limits](https://www.python-httpx.org/advanced/resource-limits/) — connection pool configuration
-- [httpx official docs — Async Support](https://www.python-httpx.org/async/) — shared client singleton pattern
-- [aiometer PyPI](https://pypi.org/project/aiometer/) — version 1.0.0, April 2025; GCRA rate limiting
-- [tenacity PyPI](https://pypi.org/project/tenacity/) — version 9.1.4, February 2026; AsyncRetrying support
-- [aiosqlite PyPI](https://pypi.org/project/aiosqlite/) — version 0.22.1, December 2025
-- [respx GitHub](https://github.com/lundberg/respx) — version 0.22.0; httpx-specific mocking
-- [pytest-asyncio PyPI](https://pypi.org/project/pytest-asyncio/) — version 1.3.0; event_loop fixture removal migration
-- [SQLite WAL mode official docs](https://sqlite.org/wal.html) — checkpoint behavior under concurrent load
-- [Python asyncio official docs](https://docs.python.org/3/library/asyncio-dev.html) — TaskGroup, Semaphore
-- [PEP 760](https://peps.python.org/pep-0760/) — No More Bare Excepts rationale
+- [simple-salesforce PyPI](https://pypi.org/project/simple-salesforce/) -- v1.12.9, Python 3.9-3.13
+- [simple-salesforce GitHub](https://github.com/simple-salesforce/simple-salesforce) -- 5K+ stars, active maintenance
+- [anthropic PyPI](https://pypi.org/project/anthropic/) -- v0.84.0, httpx internal, Pydantic v2
+- [Salesforce SOQL reference](https://developer.salesforce.com/docs/atlas.en-us.soql_sosl.meta/soql_sosl/) -- query patterns
+- [Salesforce OAuth flows](https://blog.beyondthecloud.dev/blog/salesforce-oauth-2-0-flows-integrate-in-the-right-way) -- JWT Bearer as redirect-free alternative
+- Direct codebase analysis of providers/base.py, enrichment/waterfall.py, data/models.py, data/schema.sql
 
 ### Secondary (MEDIUM confidence)
-- [SQLite performance tuning — phiresky](https://phiresky.github.io/blog/2020/sqlite-performance-tuning/) — PRAGMA settings (2020, but PRAGMAs are stable)
-- [Forward Email SQLite production config](https://forwardemail.net/en/blog/docs/sqlite-performance-optimization-pragma-chacha20-production-guide) — production PRAGMA validation
-- [SQLite concurrent writes — tenthousandmeters](https://tenthousandmeters.com/blog/sqlite-concurrent-writes-and-database-is-locked-errors/) — WAL locking behavior
-- [FullEnrich waterfall enrichment guide](https://fullenrich.com/blog/waterfall-enrichment) — industry feature expectations
-- [Clay review 2026 — Hackceleration](https://hackceleration.com/clay-review/) — competitor feature analysis
-- [CRM dedup guide 2025 — RTDynamic](https://www.rtdynamic.com/blog/crm-deduplication-guide-2025/) — dedup pattern validation
-- [Checkpoint recovery for long-running transformations — Dev3lop](https://dev3lop.com/checkpoint-based-recovery-for-long-running-data-transformations/) — pause/resume pattern validation
-- [asyncio concurrency limiting patterns — death.andgravity.com](https://death.andgravity.com/limit-concurrency) — batch processing patterns
+- [Nango: Salesforce OAuth token rotation](https://nango.dev/blog/salesforce-oauth-refresh-token-invalid-grant) -- Spring 2024 behavior change
+- [AI cold email hallucination rates](https://ruinunes.com/ai-cold-email/) -- 15% hallucination, 51% of spam is AI-generated
+- [Micro-campaign response rates](https://www.autobound.ai/blog/cold-email-guide-2026) -- 18% response rates for 10-20 person campaigns
+- [SQLite concurrent writes](https://tenthousandmeters.com/blog/sqlite-concurrent-writes-and-database-is-locked-errors/) -- write contention analysis
+- [Apollo API docs](https://docs.apollo.io/reference/) -- company search, people search endpoints
+- [Hunter.io AI cold email guide](https://hunter.io/ai-cold-email-guide) -- generation best practices
 
-### Tertiary (LOW confidence — needs validation)
-- Provider A/B testing shadow-run in waterfall enrichment context — no direct public documentation found; pattern inferred from general A/B testing and shadow deployment literature
+### Tertiary (LOW confidence)
+- [aiosalesforce](https://github.com/georgebv/aiosalesforce) -- v0.6.2, 16 stars, potential future alternative if it matures
+- AI email spam filter detection patterns -- fast-moving space, 2025-2026 data may shift as filters evolve
+- Fuzzy company name matching thresholds -- needs calibration against real data, no universal standard
 
 ---
-*Research completed: 2026-03-04*
+*Research completed: 2026-03-07*
 *Ready for roadmap: yes*

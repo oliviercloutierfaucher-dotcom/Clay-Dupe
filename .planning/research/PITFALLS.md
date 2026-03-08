@@ -1,178 +1,190 @@
 # Pitfalls Research
 
-**Domain:** Python async B2B enrichment pipeline — hardening, performance, and scaling improvements
-**Researched:** 2026-03-04
-**Confidence:** HIGH (grounded in known codebase issues documented in CONCERNS.md, verified against Python async/SQLite/httpx official sources)
+**Domain:** B2B prospecting platform -- adding Salesforce integration, AI email generation, multi-source company sourcing to existing Python enrichment engine
+**Researched:** 2026-03-07
+**Confidence:** MEDIUM-HIGH (Salesforce/SQLite pitfalls well-documented; AI email generation is a fast-moving space with less stable best practices)
 
 ---
 
 ## Critical Pitfalls
 
-### Pitfall 1: Bare Exception Refactor That Still Swallows Errors
+### Pitfall 1: Salesforce OAuth Token Lifecycle Mismanagement
 
 **What goes wrong:**
-Developers replace `except Exception` with named exception types but keep the same silent failure pattern inside the handler — catching `httpx.HTTPStatusError` and logging nothing, or catching `KeyError` and returning `None` without any record of the failure. The refactor looks complete but debugging is just as hard as before.
+Access tokens expire (typically 2 hours), refresh tokens can be revoked or expire based on Connected App policy, and since Spring 2024, Salesforce issues NEW refresh tokens on each refresh (revoking the old one). If you store a refresh token and don't update it after each refresh, the next refresh call fails with `invalid_grant` and the user must re-authenticate manually.
 
 **Why it happens:**
-The mechanical change (specific type) is easy. The behavioral change (what to do when caught) requires understanding each failure mode. Teams tackle the type narrowing without auditing the handler bodies.
+Developers treat OAuth tokens like API keys -- store once, use forever. Salesforce's token rotation policy is unusual and not obvious from basic tutorials. Additionally, Streamlit's stateless session model means tokens stored in `st.session_state` vanish when the tab closes, so you need persistent token storage.
 
 **How to avoid:**
-Each exception handler must do at least one of: log with full context (provider name, input, response snippet), re-raise, or return a typed `ProviderResult` with `success=False` and a reason field. No handler should be a silent `pass` or a bare `return None`. After refactoring, grep for `except` clauses and confirm every one emits a log line or raises.
+- Store tokens in SQLite (encrypted at rest) with an `updated_at` timestamp, not in session state
+- After every token refresh, persist the new refresh token immediately BEFORE using the new access token
+- Use `simple-salesforce` with explicit `session_id` + `instance_url` rather than username/password flow for production
+- Set Connected App refresh token policy to "Refresh token is valid until revoked" to avoid silent expiration
+- Implement a token health check on app startup that proactively refreshes if token age > 1 hour
 
 **Warning signs:**
-- Provider waterfall reports zero errors in logs during a batch that returned low hit rates
-- A budget is consumed but campaign shows no failed rows — errors are being caught and treated as clean misses
-- Tests pass but manual testing of a bad API key silently returns no results instead of raising
+- `invalid_grant` errors appearing in logs after days of working fine
+- Users reporting they need to "reconnect Salesforce" periodically
+- Token refresh works in development but fails in production (different Connected App policies)
 
 **Phase to address:**
-Security and hardening phase — must be the first phase since silent failures corrupt all downstream data quality work.
+Phase 1 (Salesforce Integration) -- must be the first thing built and tested, as every subsequent Salesforce feature depends on reliable auth.
 
 ---
 
-### Pitfall 2: Non-Atomic Budget Check + Deduction Race Condition
+### Pitfall 2: SQLite Write Contention When Adding Concurrent Workflows
 
 **What goes wrong:**
-The budget check ("is $X remaining?") and the credit deduction ("subtract $X") are separate SQLite write operations. Under concurrent enrichment — two Streamlit sessions running batch jobs simultaneously — both sessions can pass the budget check before either deducts. Credits are spent twice and the budget limit is violated.
+v1.0 was designed for one operation at a time. v2.0 introduces concurrent write paths: background Salesforce sync writing cached accounts, enrichment campaigns writing results, company sourcing writing new records, and AI email generation writing drafts -- all hitting the same SQLite database. Even with WAL mode, SQLite has a single-writer lock. Under concurrent writes, one process gets `database is locked` errors.
 
 **Why it happens:**
-SQLite WAL mode allows concurrent reads, so both sessions read the same budget row simultaneously. The writes succeed because SQLite serializes them, but by then both have already decided to proceed.
+Each new feature adds its own write path independently. Developers test each feature in isolation where it works fine. The contention only appears when features run simultaneously, which is the normal production pattern.
 
 **How to avoid:**
-Wrap budget check and deduction in a single `BEGIN IMMEDIATE` transaction. SQLite `BEGIN IMMEDIATE` acquires a reserved lock at transaction start, blocking other writers from reading stale budget state. This is the correct primitive for this use case — not application-level locking. Verify with a concurrent test that spins two batch jobs against a budget limit.
+- Serialize ALL writes through a single async write queue (a dedicated `asyncio.Queue` processed by one writer coroutine) -- this is the standard SQLite concurrency pattern
+- Set `busy_timeout` to 5000ms minimum (the default is 0, which fails immediately on lock contention)
+- Keep write transactions short -- INSERT results immediately, do not hold transactions open during API calls
+- Use `BEGIN IMMEDIATE` for write transactions to fail fast rather than deadlock
+- If write contention becomes measurable (>100ms average wait), that is the signal to evaluate PostgreSQL -- but for team-size workloads with a write queue, SQLite handles it
 
 **Warning signs:**
-- Budget overage in credit usage reports (spent more than the configured limit)
-- Discrepancy between `credits_used` column and actual provider billing
-- Race condition only appears when two Streamlit tabs run enrichment simultaneously
+- Sporadic `sqlite3.OperationalError: database is locked` in logs
+- Enrichment campaigns that "sometimes fail" on certain rows but succeed on retry
+- Salesforce sync timing out because it cannot acquire the write lock
 
 **Phase to address:**
-Security and hardening phase — budget integrity is a correctness requirement, not a performance optimization.
+Phase 1 (Infrastructure) -- implement the write queue before adding any new write-heavy features. Retrofit existing enrichment writes to use it.
 
 ---
 
-### Pitfall 3: Non-Atomic Campaign State Leaving Orphaned Rows on Crash
+### Pitfall 3: AI Email Hallucination Producing Verifiably False Claims
 
 **What goes wrong:**
-Campaign progress, credit usage, and cache writes are three separate DB operations. If the process crashes between the first and third write — which is likely during a 500-row batch — the campaign shows partial state that cannot be cleanly resumed. Some rows appear "enriched" (cache has result) but the campaign row still shows "pending". Resuming re-enriches and double-spends credits.
+LLMs hallucinate facts about companies and people roughly 15% of the time. Real-world examples: AI claims a prospect wrote an article they never wrote, invents product names the company does not make, fabricates partnership announcements, states a newsletter has been running for three years when it has not. In B2B prospecting for niche industrial/A&D/medical device companies, a single hallucinated claim in a cold email destroys credibility permanently.
 
 **Why it happens:**
-Developers add features incrementally. The cache write, the campaign row update, and the credit deduction were each added at different times without grouping them into a single transaction. It works in normal operation but the crash window between operations is a real production risk.
+Developers prompt the LLM with enriched company data and ask it to "personalize" the email. The LLM fills gaps in the data with plausible-sounding but fabricated specifics. The enriched data from Apollo/Datagma may be incomplete (missing recent news, outdated product info), and the LLM compensates by inventing details.
 
 **How to avoid:**
-Wrap the post-enrichment state update (cache write + campaign row update + credit deduction) in a single `BEGIN` / `COMMIT` transaction. If any step fails the transaction rolls back and the row remains "pending" — safe to retry. Add a database-level test that kills the process mid-batch and verifies no orphaned state.
+- Constrain the prompt to ONLY use data fields explicitly provided -- use structured output (JSON mode or function calling) to enforce which fields the LLM can reference
+- Implement a "fact anchor" template: every personalized claim must cite which input field it came from (e.g., `{company.industry}`, `{person.title}`)
+- Add a post-generation validation step that checks every proper noun and specific claim in the output against the input data
+- Never ask the LLM to "research" or "find information about" the company -- it will hallucinate
+- Use temperature 0.3-0.5, not higher -- creativity in cold emails means hallucination risk
+- Provide explicit negative instructions: "Do NOT mention any facts, products, articles, or events not provided in the input data"
 
 **Warning signs:**
-- Campaign shows "In Progress" after process restart with no active workers
-- Cache hit returns a result but campaign row shows the contact as unenriched
-- Credit usage counter diverges from campaign result counts over time
+- Generated emails mention specific products, articles, or events not in the enrichment data
+- Emails reference the prospect's "recent LinkedIn post" when no LinkedIn content was scraped
+- All emails for companies in the same industry contain suspiciously specific but similar "personalization"
 
 **Phase to address:**
-Security and hardening phase — data integrity before performance work, so that chunked batch processing builds on a reliable state model.
+Phase 2 (AI Email Generation) -- build validation into the generation pipeline from day one, not as a retrofit.
 
 ---
 
-### Pitfall 4: asyncio.gather() Loading Entire Batch Into Memory Before Processing
+### Pitfall 4: Salesforce Duplicate Detection That Misses Matches
 
 **What goes wrong:**
-Implementing chunked batch processing by calling `asyncio.gather(*[enrich(row) for row in all_rows])` on the full CSV. Even with a semaphore controlling concurrency, `asyncio.gather()` materializes the entire coroutine list upfront. A 2,000-row import creates 2,000 coroutine objects simultaneously. Memory pressure spikes and the benefit of "chunking" is lost.
+Naive dedup (exact match on email or company name) misses obvious duplicates: "IBM" vs "International Business Machines", "john@ibm.com" vs "j.smith@ibm.com" (same person, different email), companies with multiple domains. The platform flags a prospect as "new" when they already exist in Salesforce, leading to duplicate outreach -- the exact problem the tool is supposed to prevent.
 
 **Why it happens:**
-`asyncio.gather()` with a semaphore is the standard concurrency-limiting pattern and it looks correct. The memory issue is non-obvious because the semaphore limits active I/O but not coroutine instantiation.
+Salesforce stores data as users entered it -- inconsistent formatting, abbreviations, legal names vs DBAs. The enrichment data from Apollo/Icypeas may use different formatting than what is in Salesforce. Exact string matching seems "safe" but catches less than 60% of real duplicates in practice.
 
 **How to avoid:**
-Process rows in explicit chunks (`itertools.islice` or list slicing into groups of N). Within each chunk use `asyncio.gather()`. Between chunks, await completion before creating the next chunk. Alternatively, use a queue-based producer/consumer pattern where the producer feeds rows lazily. For this codebase the chunk-per-N approach is simpler and matches the existing row-processing model.
+- Match on MULTIPLE fields with a scoring system: domain match (highest weight), normalized company name (fuzzy, threshold 85%), email exact match, phone match, LinkedIn URL match
+- Normalize company names before comparison: strip "Inc.", "LLC", "Corp.", "Ltd.", lowercase, remove punctuation
+- Use domain as the primary dedup key for company matching -- it is the most stable identifier across systems
+- For contacts, match on (normalized_email OR (first_name + last_name + company_domain)) -- catches people who changed email addresses
+- Cache Salesforce accounts/contacts locally with daily refresh to avoid per-prospect API calls -- Salesforce rate limits make real-time checking infeasible at batch scale
+- Surface "uncertain" matches (score 50-85%) for human review rather than auto-skipping
 
 **Warning signs:**
-- Memory usage during batch enrichment grows linearly with CSV size regardless of concurrency limit
-- Process is killed by the OS (OOM) on large imports
-- Profiling shows thousands of coroutine objects created before any complete
+- Users report that "Salesforce check passed" but the prospect was already in their CRM
+- Dedup rate is suspiciously low (<5% when the team has been prospecting in the same verticals for months)
+- Matching works for exact email but misses company-level duplicates entirely
 
 **Phase to address:**
-Performance and scaling phase — after hardening is complete, chunked processing should be the first performance improvement since it unblocks large CSV support.
+Phase 1 (Salesforce Integration) -- dedup logic is the core value proposition of the Salesforce integration. Get this right before moving to other features.
 
 ---
 
-### Pitfall 5: httpx.AsyncClient Recreated Per Provider Instance
+### Pitfall 5: Streamlit OAuth Callback Breaking in Production
 
 **What goes wrong:**
-Each `AsyncClient` instantiation creates a new connection pool. If the waterfall instantiates providers fresh per enrichment row (or per session), the TLS handshake overhead accumulates and connection pooling never benefits the workload. At batch scale, each row pays the full connection establishment cost for every provider.
+Salesforce OAuth requires a redirect callback URL. Streamlit has no native route handling -- it is a single-page app that reruns the entire script on every interaction. OAuth callback URLs either do not work, lose session state on redirect, or break when Streamlit is behind a reverse proxy (Railway, Fly.io) where the external URL differs from the internal URL.
 
 **Why it happens:**
-The natural object-oriented pattern is to construct a provider with its credentials and an internal client. When providers are short-lived (per-request objects), the client dies with them. The code looks clean but connection reuse never happens.
+Streamlit was designed for data dashboards, not web applications with OAuth flows. The `st.session_state` resets on page reload. Third-party OAuth components (`streamlit-oauth`) exist but are fragile and poorly maintained. Developers assume OAuth "just works" like in Flask/FastAPI, then discover Streamlit's execution model is fundamentally different.
 
 **How to avoid:**
-Share a single `httpx.AsyncClient` per provider across all enrichment operations, or use a single application-level client passed to all providers. The client should be created once at application startup and closed at shutdown. Use `httpx.Limits` to configure `max_keepalive_connections` appropriate to concurrent provider calls (suggested: `max_keepalive_connections=10, max_connections=20` per provider). Monitor for `PoolTimeout` after extended operation — this signals pool exhaustion and may require periodic client refresh.
+- Do NOT implement OAuth callback in Streamlit itself. Instead, use a one-time setup flow:
+  1. Build a tiny FastAPI endpoint (or CLI command) that handles the OAuth dance and stores tokens in SQLite
+  2. In Streamlit, just read the stored tokens from SQLite and test if they are valid
+  3. If tokens are invalid, show a "Reconnect Salesforce" button that launches the setup flow
+- Alternative: use Salesforce's JWT Bearer flow (no redirect needed) -- requires uploading a certificate to the Connected App but eliminates the callback problem entirely
+- For Railway/Fly.io: ensure `SALESFORCE_CALLBACK_URL` is configurable via environment variable, not hardcoded to localhost
 
 **Warning signs:**
-- HTTP request latency does not decrease after the first request to a provider
-- Profiling shows TLS handshake time on every single API call
-- `PoolTimeout` errors appear after hours of batch operation
+- OAuth works on localhost but fails on deployed URL
+- "Connection lost" after Salesforce redirect because Streamlit session state is wiped
+- Users stuck in an OAuth loop -- redirect works but state is not captured back in Streamlit
 
 **Phase to address:**
-Performance and scaling phase — connection pooling should be established during the HTTP client sharing work before adaptive concurrency is added on top.
+Phase 1 (Salesforce Integration) -- this is an architectural decision that must be made before writing any Salesforce code. The wrong choice requires a full rewrite.
 
 ---
 
-### Pitfall 6: Fixed Concurrency Limits Causing Either 429 Storms or Artificial Slowdowns
+### Pitfall 6: AI-Generated Emails Triggering Spam Filters
 
 **What goes wrong:**
-Hardcoded semaphore values (e.g., `asyncio.Semaphore(5)`) are set conservatively to avoid rate limiting. In practice, providers have different limits and the same value both over-throttles permissive providers (Apollo allows higher throughput) and under-throttles restrictive ones (Icypeas has tighter limits). This results in wasted throughput on fast providers and 429 errors on slow ones when the limit is miscalibrated.
+AI-generated cold emails have identifiable linguistic patterns that modern spam filters specifically detect. By 2025, 51% of spam is AI-generated, so Google and Microsoft have trained filters on AI writing patterns. Emails land in spam even with correct SPF/DKIM/DMARC configuration on the sending domain.
 
 **Why it happens:**
-Fixed concurrency limits are set once at development time and never revisited. Rate limit responses from providers (`HTTP 429`) are caught by the circuit breaker but the learning — "back off to N concurrent requests" — never feeds back into the semaphore value.
+LLMs produce characteristic language patterns: "I was impressed by...", "I noticed your company...", "I'd love to connect...", "innovative", "leverage". They over-use certain transitional phrases and produce unnaturally smooth text. Testing of major AI personalization tools shows 85-95% of "personalized" content is templates with 3-5 fields swapped in, which filters detect as pattern-repetitive.
 
 **How to avoid:**
-Implement per-provider concurrency limits, not a single global limit. When a provider returns a 429, reduce its semaphore count by 1 (down to a minimum of 1). When a configurable time window passes without errors, increment back up. This is adaptive concurrency, not full feedback control — start simple. Store the current limit per provider in a runtime dict, not the database. Reset to defaults on application restart.
+- Keep emails SHORT: 3-5 sentences maximum. AI tends to over-elaborate; cold email best practice is under 100 words
+- Provide explicit banned phrases in the prompt: "impressed", "fascinated", "innovative", "leverage", "synergy", "I noticed that", "I came across"
+- Generate multiple variants per template and let the user pick/edit -- never auto-send AI output
+- Add a spam-score heuristic check: word count >150 = warning, exclamation marks >1 = warning, ALL CAPS words = warning, >2 links = warning
+- Structure the prompt to produce a "busy executive writing to a peer" tone, not a "sales rep writing to a lead" tone
+- Include CAN-SPAM compliance elements: unsubscribe mechanism, physical address ($51,744 per violation per email)
 
 **Warning signs:**
-- One provider consistently produces 429 errors while others are idle
-- Campaign throughput is bottlenecked on the slowest provider even when faster providers could handle more work
-- Logs show all 429 errors coming from the same provider across multiple batch runs
+- Open rates below 15% on emails that passed technical deliverability checks (SPF/DKIM/DMARC all pass)
+- Reading 10 generated emails back-to-back and they all feel identical despite different prospect data
+- Emails consistently exceed 150 words
 
 **Phase to address:**
-Performance and scaling phase — implement after connection pooling is stable, since the adaptive limit needs reliable connections to behave correctly.
+Phase 2 (AI Email Generation) -- build spam-awareness into prompt engineering and add output validation before any emails are generated.
 
 ---
 
-### Pitfall 7: SQLite WAL File Growing Unboundedly Under Sustained Reads
+### Pitfall 7: Company Sourcing Producing Duplicate and Stale Records
 
 **What goes wrong:**
-SQLite WAL mode allows concurrent reads during writes, but the WAL file is only checkpointed (flushed back to the main DB file) when no readers are active. During extended batch enrichment — which continuously reads campaign rows and cache — the WAL file never gets a clean checkpoint window. The WAL file grows unboundedly, degrading all query performance and inflating database file size.
+Sourcing companies from Apollo search, CSV import, and manual add creates duplicate company records in the local database. "Acme Corp" from Apollo and "ACME Corporation" from CSV are stored as separate companies, enriched separately (wasting credits), and generate separate prospect lists with conflicting data.
 
 **Why it happens:**
-WAL mode is correctly enabled (the codebase has it) but checkpoint management is left to SQLite defaults (`wal_autocheckpoint = 1000 pages`). Under sustained concurrent read/write workloads, the autocheckpoint is starved because readers always hold open transactions.
+Each source has its own identifier scheme (Apollo has `apollo_id`, CSV has none, manual add has none). Without a dedup step at ingestion, every source creates new rows. The existing `Company` model has `normalize_domain` but no company-level dedup logic that uses it during insert.
 
 **How to avoid:**
-Schedule explicit `PRAGMA wal_checkpoint(TRUNCATE)` calls between batch chunks (not mid-chunk). This is the correct time to checkpoint: no active row processing, brief window with no readers. Also set `PRAGMA wal_autocheckpoint = 100` to checkpoint more aggressively. Add monitoring of WAL file size (poll the `.wal` file size) and log a warning when it exceeds a threshold.
+- Implement company dedup at INGESTION time, not post-hoc
+- Primary dedup key: normalized domain (already have `normalize_domain` in the Company model -- use it as a unique constraint)
+- Secondary dedup: fuzzy company name match when domain is missing or does not match (threshold: 90% similarity using `rapidfuzz` or `thefuzz`)
+- On duplicate detection: merge data from new source into existing record (prefer newer data for mutable fields like `employee_count`, keep original for immutable fields like `founded_year`)
+- Add a `sources` list field to the Company model that tracks which data sources contributed to each record
+- For CSV imports: preview detected duplicates BEFORE committing the import, let user choose merge vs skip vs create-new
 
 **Warning signs:**
-- SQLite `.wal` file growing to hundreds of MB during batch processing
-- Query times increasing over the course of a long batch run
-- Performance is good after fresh start but degrades within minutes of batch enrichment
+- Same company appearing multiple times in prospect lists with slight name variations
+- Enrichment credit usage higher than expected because duplicates are independently enriched
+- Company data contradicts itself (different employee counts for what is clearly the same company)
 
 **Phase to address:**
-Performance and scaling phase — during the SQLite optimization work, alongside index additions.
-
----
-
-### Pitfall 8: Cache Index Absent, Making TTL Queries Full Table Scans
-
-**What goes wrong:**
-The cache table is queried by `(provider, input_hash)` or `(provider, domain, email)` on every enrichment step. Without an index on these columns, SQLite performs a full table scan. At 10,000 cached results this is imperceptible. At 100,000+ entries (realistic after months of operation) every waterfall step's cache check degrades from microseconds to tens of milliseconds, stacking latency across 4 providers per row.
-
-**Why it happens:**
-Cache tables are designed for fast reads but the index is an afterthought. During initial development with small datasets the query is fast enough that the problem is invisible.
-
-**How to avoid:**
-Add a composite index on `(provider, cache_key)` at schema creation time, not after the fact. Also add an index on `expires_at` for TTL eviction queries. Run `EXPLAIN QUERY PLAN` on the cache lookup query and verify it says "USING INDEX" not "SCAN TABLE". Add a schema migration if the table already exists in production without the index.
-
-**Warning signs:**
-- `EXPLAIN QUERY PLAN SELECT * FROM cache WHERE provider = ? AND cache_key = ?` shows "SCAN TABLE cache"
-- Cache lookup times increase linearly as the cache table grows
-- SQLite profiling shows cache queries taking longer than actual API calls
-
-**Phase to address:**
-Performance and scaling phase — index the cache table before implementing automatic cache eviction, since eviction queries also need the `expires_at` index.
+Phase 1 (Company Sourcing) -- dedup must be built into the ingestion pipeline from the start, not bolted on after duplicates already exist.
 
 ---
 
@@ -182,73 +194,78 @@ Shortcuts that seem reasonable but create long-term problems.
 
 | Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
 |----------|-------------------|----------------|-----------------|
-| `except Exception: return None` in providers | Keeps waterfall moving on any error | Silent data loss; impossible to distinguish provider timeout from auth failure from network error | Never — always log or return typed failure result |
-| Single global semaphore across all providers | Simple implementation | One slow provider throttles all providers; 429 errors from tight providers drag down permissive ones | Only in initial MVP before provider-specific limits are added |
-| Per-row `httpx.AsyncClient` creation | No state to manage | TLS handshake overhead on every call; no connection reuse; PoolTimeout risk at scale | Never for batch operations |
-| String-formatted SQL queries | Slightly faster to write | SQL injection vulnerability on any user-controlled input reaching queries | Never — parameterized queries have identical performance |
-| Separate DB writes for cache + campaign + credit | Simpler per-feature implementation | Crash between writes leaves inconsistent state requiring manual cleanup | Never where atomicity matters — use transactions |
-| Full CSV in `asyncio.gather()` | Simpler code | OOM crash on large imports; no partial progress | Only for CSVs provably under 50 rows |
-| No WAL checkpoint management | Zero configuration overhead | WAL file grows to GB range under sustained load | Never in production with sustained batch workloads |
+| Storing Salesforce tokens in `.env` file | Quick setup, no encryption code needed | Tokens rotate -- `.env` becomes stale within hours, no multi-user support | Never in production. Development/testing only |
+| Exact-match-only Salesforce dedup | Simple to implement, fast to query | Misses 40%+ of real duplicates, undermines the core value proposition | Never -- fuzzy matching is table stakes for this feature |
+| No write queue for SQLite | Fewer abstractions, simpler code | `database is locked` errors when Salesforce sync + enrichment + import run concurrently | Only if app stays single-operation (v1.0 model), which v2.0 explicitly breaks |
+| Hardcoding OpenAI as the only LLM provider | Faster to build, simpler config | Vendor lock-in, no fallback when OpenAI is down, no cost optimization across providers | MVP only -- add provider abstraction early |
+| Sending AI emails without human review step | Faster workflow, fewer clicks | Hallucinated content sent to real prospects, spam complaints, CAN-SPAM legal exposure | Never -- always require human approval before send |
+| Caching Salesforce data only in Streamlit session state | No schema changes, no migration | Lost on tab close, lost on page reload, no persistence across sessions | Never -- use SQLite for Salesforce cache |
+| Single API version hardcoded for Salesforce | No version negotiation code | Breaks silently when Salesforce deprecates that API version (they deprecate ~3 versions per year) | Never -- use `simple-salesforce` which auto-negotiates |
 
 ---
 
 ## Integration Gotchas
 
-Common mistakes when connecting to external API providers.
+Common mistakes when connecting to external services in v2.0.
 
 | Integration | Common Mistake | Correct Approach |
 |-------------|----------------|------------------|
-| Apollo.io | Catching `HTTP 429` as a generic error and immediately retrying, triggering more 429s | Implement exponential backoff with jitter; reduce concurrency semaphore count on 429 |
-| Findymail / Icypeas / ContactOut | Direct dict access `response["email"]` without `.get()` | Use `response.get("email")` with explicit fallback; log unexpected response shapes |
-| All providers | Creating a new `httpx.AsyncClient` per enrichment call | Share one long-lived `AsyncClient` per provider; close it at application shutdown |
-| All providers | Treating `HTTP 200 with empty results` the same as `HTTP 200 with results` | Explicitly check result payload is non-empty before caching and marking as success |
-| All providers | No timeout on slow API responses | Set `httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)` — enrichment APIs can take 10-30s |
-| ContactOut | Using LinkedIn URL directly without validating format | Validate LinkedIn URL format before passing to ContactOut; invalid URLs waste credits |
-| SMTP verification | No rate limiting per domain | Track verification attempts per domain per hour; skip further attempts after 3 failures (spam detection risk) |
+| Salesforce REST API | Hardcoding API version (e.g., `/services/data/v58.0/`) | Use `simple-salesforce` which auto-negotiates version, or query `/services/data/` for latest |
+| Salesforce SOQL | Building queries with string concatenation from user/enrichment data | Use `simple-salesforce`'s `sf.query()` with proper escaping; never format company names into SOQL strings |
+| Salesforce bulk queries | Querying accounts one-by-one per prospect during enrichment | Bulk query all accounts/contacts once daily, cache to SQLite, match against local cache |
+| Salesforce OAuth | Implementing redirect callback inside Streamlit | Use a separate FastAPI endpoint or JWT Bearer flow -- Streamlit cannot handle OAuth callbacks |
+| OpenAI API | No timeout or retry logic on LLM calls | Use `httpx` with 30s timeout, retry on 429/500/503 with exponential backoff (match existing `BaseProvider` pattern) |
+| OpenAI API | Sending full company descriptions in prompt (2000+ tokens of noise) | Extract only 5-10 relevant fields for personalization, keep prompts under 500 input tokens |
+| OpenAI API | Using `temperature=1.0` for "creative" emails | Use `temperature=0.3-0.5` -- creativity in cold emails means hallucination and spam risk |
+| Apollo company search | Not paginating results beyond first page | Apollo returns max 100 per page -- implement cursor-based pagination for broad ICP searches |
+| CSV import | Trusting column headers without data validation | Fuzzy-match columns (existing v1.0 pattern works), but also validate data types and reject rows missing domain AND company name |
+| Multi-source merge | Overwriting existing data with newer source unconditionally | Merge strategy: keep non-null values from each source, prefer source with higher data completeness |
 
 ---
 
 ## Performance Traps
 
-Patterns that work at small scale but fail as usage grows.
+Patterns that work at small scale but fail as v2.0 usage grows.
 
 | Trap | Symptoms | Prevention | When It Breaks |
 |------|----------|------------|----------------|
-| Unindexed cache table | Cache lookups slower than API calls after DB grows | Add composite index on `(provider, cache_key)` at schema creation | ~10,000 cache rows (~weeks of operation) |
-| `asyncio.gather()` on full CSV | OOM kill on large imports | Process in explicit chunks of 50-100 rows | ~500 rows |
-| Fixed concurrency limit across providers | 429 storms or underutilization | Per-provider semaphores with adaptive adjustment | First day of production batch runs |
-| Unbounded WAL file growth | Query times degrade during long batch | `PRAGMA wal_checkpoint(TRUNCATE)` between chunks | ~1 hour of sustained batch enrichment |
-| Unshared HTTP clients | Each API call includes TLS handshake time | Single long-lived `AsyncClient` per provider | Every call at any scale — overhead is constant but cumulative |
-| No deduplication before enrichment | Same contact enriched across campaigns, credits wasted | Cross-campaign dedup check before waterfall entry point | First time two campaigns share a contact list |
-| Unbounded pattern engine queries | Memory spike on domains with many learned patterns | Paginate pattern queries; cap patterns per domain | Domains with >100 learned email patterns |
+| Real-time Salesforce dedup per prospect | Enrichment slows to 1-2 contacts/second due to Salesforce API latency | Cache Salesforce accounts locally with daily refresh, match against cache | >50 prospects per batch |
+| Unbounded concurrent OpenAI requests | 429 rate limit errors, incomplete email batches | Use `aiometer` (already in stack) to limit to 3-5 concurrent LLM calls | >10 concurrent email generations |
+| Loading entire Salesforce org into memory | Memory spike, OOM on orgs with tens of thousands of accounts | Stream results with `sf.query_all_iter()`, write directly to SQLite in batches | >10K accounts in Salesforce |
+| Generating emails synchronously in Streamlit UI | UI freezes for 30+ seconds, Streamlit script timeout | Generate async in background, poll for completion, show progress bar | >5 emails generated at once |
+| Full-table scan for company dedup during import | 1000-company CSV import takes minutes | Add composite index on `(domain)` and `(name)` with normalization, use covering indexes | >500 companies in database |
+| Salesforce API calls counting against daily limit during development/testing | Hit 100K daily limit, production sync blocked | Use Salesforce sandbox for development; monitor API usage via `sf.limits()` call | Depends on org edition, typically 100K-150K calls/day |
 
 ---
 
 ## Security Mistakes
 
-Domain-specific security issues beyond general web security.
+Domain-specific security issues for v2.0 features.
 
 | Mistake | Risk | Prevention |
 |---------|------|------------|
-| String-formatted SQL in `database.py` | SQL injection if any user-controlled string (company name, domain, email from import) reaches a query | Replace all string-formatted queries with parameterized queries; audit entire `database.py` |
-| No API key rotation mechanism | Single leaked key compromises all enrichment budget with no recovery path | Add key rotation support in settings; track key age; log key usage anomalies |
-| SMTP probing without per-domain rate limiting | SMTP verification triggers spam detection on target domains, poisoning future deliverability checks | Rate limit SMTP probes to max 3 per domain per hour; add exponential backoff after rejection |
-| Cache stores raw email addresses without access control | Any user of the shared Streamlit instance can view enrichment results for all campaigns | Acceptable for internal team tool; re-evaluate if access broadens beyond trusted team |
-| No schema migration tracking | Ad-hoc schema changes break existing databases silently | Use a schema version table; run migrations programmatically at startup; never alter schema inline |
+| Storing Salesforce refresh tokens in plaintext SQLite | Token theft gives full read access to entire CRM -- accounts, contacts, opportunities, revenue data | Encrypt tokens at rest using `cryptography.fernet` with key from environment variable |
+| Passing prospect PII (name, email, company) to OpenAI without DPA | GDPR violation if prospects are EU-based; potential data use for model training | Review OpenAI's data processing terms; use API (not ChatGPT) which has zero-retention by default; document data flows |
+| AI prompt injection via enrichment data | Malicious company description in Apollo/CSV data could hijack email generation prompt -- output arbitrary content or exfiltrate data in email body | Sanitize all enrichment data before including in LLM prompts: strip control characters, limit field lengths to 200 chars, escape special characters |
+| SOQL injection via crafted company/person names | Attacker-crafted company name imported via CSV could exfiltrate Salesforce data or modify records | Use `simple-salesforce` parameterized queries exclusively; never string-format SOQL with user-supplied data |
+| Exposing Salesforce instance URL or org ID in Streamlit UI | Reveals org type, edition, and potential attack surface to anyone with UI access | Store server-side only; never render Salesforce metadata in the frontend; use settings not session state |
+| OpenAI API key in client-side code or logs | Key theft allows unlimited LLM usage on your account | Store in `.env` only; verify key never appears in Streamlit source or browser dev tools; scrub from log output |
 
 ---
 
 ## UX Pitfalls
 
-Common user experience mistakes in this domain.
+Common user experience mistakes when adding these v2.0 features.
 
 | Pitfall | User Impact | Better Approach |
 |---------|-------------|-----------------|
-| No pause/resume for batch enrichment | Network interruption or accidental close loses all progress; user must restart the entire campaign | Implement campaign checkpoint every N rows; resume from last checkpoint on restart |
-| Silent enrichment failures treated as "not found" | User assumes no email exists for a contact when actually a provider API key expired or rate limit hit | Distinguish between "no result found" and "provider error" in campaign results; show error counts separately |
-| No progress indicator during large batch | User clicks Enrich and sees nothing for minutes; may click again creating duplicate campaigns | Show row-by-row progress with provider name and status; update every 5-10 rows |
-| Budget exhaustion discovered after the batch | Credits consumed before user knows budget was hit | Check budget estimate before starting batch; warn if batch may exceed remaining budget |
-| Duplicate patterns for same domain | Pattern confidence scores become unreliable; conflicting patterns produce inconsistent email generation | Deduplicate patterns on write; use upsert semantics in `pattern_engine.py` |
+| No visibility into Salesforce match confidence | Users cannot tell if a "duplicate" is a strong or weak match, leading to distrust | Show match score and which fields matched (email, domain, name) -- let user override decisions |
+| AI email generation with no editing step | Users accidentally send emails with hallucinated content to real prospects | Always present emails in an editable text area with explicit "Review and Approve" workflow |
+| Salesforce connection status not visible | Users run enrichment not knowing Salesforce dedup is disconnected, defeating the purpose | Show persistent connection indicator in sidebar (green=connected, yellow=token expiring, red=disconnected) |
+| Company source not shown in list view | Users cannot tell if a company came from Apollo search, CSV import, or manual entry | Add source badge/icon to company list view -- provenance matters for data trust |
+| Bulk email generation with no preview step | Users generate 200 emails and discover the tone/template is wrong, wasting time and LLM credits | Generate 3-5 sample emails first, get user approval on tone and content, then generate the rest |
+| No undo for "skip as Salesforce duplicate" | User incorrectly marks a prospect as duplicate, loses the record with no recovery | Add "restore skipped" action, log all skip decisions with match details and timestamp |
+| Mixing stale CSV data with fresh API data without indicator | Users trust outdated CSV-sourced company data alongside real-time Apollo data | Show data freshness indicator (e.g., "sourced 3 months ago from CSV") next to each company record |
 
 ---
 
@@ -256,13 +273,17 @@ Common user experience mistakes in this domain.
 
 Things that appear complete but are missing critical pieces.
 
-- [ ] **Exception handling refactor:** Looks done when exception types are narrowed. Verify each handler body — does it log with context? Does it return a typed failure or raise? Silent handlers with specific types are just as bad as bare except.
-- [ ] **SQLite parameterized queries:** Looks done when obvious string concatenation is replaced. Verify with `grep -n "%" database.py` and `grep -n "f\"" database.py` — format strings in SQL are the same risk as `%` concatenation.
-- [ ] **Connection pooling:** Looks done when `AsyncClient` is moved to class level. Verify client is created once at application start, not once per class instantiation (if the class is instantiated per-request, moving to class level doesn't help).
-- [ ] **Cache indexing:** Looks done when `CREATE INDEX` is added to schema. Verify the index is actually used — run `EXPLAIN QUERY PLAN` on the cache lookup query and confirm it says "USING INDEX".
-- [ ] **Batch chunking:** Looks done when rows are sliced into groups. Verify memory profile — chunking the coroutine list but passing all chunks to `asyncio.gather()` immediately doesn't help. Chunks must be awaited sequentially.
-- [ ] **Budget atomicity:** Looks done when budget check is near deduction code. Verify they share a single `BEGIN IMMEDIATE` transaction — proximity in code is not the same as atomicity.
-- [ ] **WAL checkpoint management:** Looks done when `PRAGMA journal_mode=WAL` is set. Verify WAL file size doesn't grow during batch runs — WAL mode without checkpoint management is incomplete.
+- [ ] **Salesforce OAuth:** Token refresh works -- but does it persist the NEW refresh token after each refresh? Test by waiting 2+ hours, refreshing, then refreshing again with the stored token
+- [ ] **Salesforce dedup:** Works for exact email match -- but test with company name variations ("IBM" vs "International Business Machines"), different email formats for same person, companies with multiple domains
+- [ ] **AI emails:** Generates personalized emails -- but read 20 generated emails back-to-back. Do they all sound the same despite different data? (Template fatigue = spam filter signal)
+- [ ] **AI emails:** Content looks good -- but does every factual claim trace back to an input data field? Check 10 emails for hallucinated products, articles, or events
+- [ ] **AI emails:** Emails generate -- but do they include unsubscribe link and physical address? (CAN-SPAM: $51,744 per violation per email)
+- [ ] **Company sourcing:** CSV import works -- but import the same CSV twice. Are there zero new duplicate rows?
+- [ ] **Company sourcing:** Apollo search works -- but does it paginate? Test with a broad ICP query returning >100 results
+- [ ] **Salesforce sync:** Queries accounts successfully -- but what happens with a 50K-account org? Does it timeout, OOM, or gracefully paginate?
+- [ ] **Write concurrency:** Each feature works in isolation -- but run Salesforce sync + enrichment campaign + CSV import simultaneously. Any `database is locked` errors?
+- [ ] **Token expiry:** Everything works today -- but simulate token expiry (revoke token in Salesforce), then verify the app detects this and prompts re-auth gracefully instead of silently failing dedup checks
+- [ ] **Deployed OAuth:** Works on localhost -- but test the full OAuth flow on the deployed Railway/Fly.io URL with the production callback URL
 
 ---
 
@@ -272,13 +293,14 @@ When pitfalls occur despite prevention, how to recover.
 
 | Pitfall | Recovery Cost | Recovery Steps |
 |---------|---------------|----------------|
-| Silent exceptions masked real errors, corrupt campaign state | HIGH | Audit all campaign rows for inconsistent state (enriched in cache but pending in campaign); re-run affected rows; add retrospective logging |
-| Budget race condition overspent limits | MEDIUM | Identify affected time window from credit logs; calculate overages; set budget to 0 temporarily; add transaction fix before re-enabling |
-| Non-atomic crash left orphaned rows | MEDIUM | Run reconciliation query: find rows where cache has result but campaign row is "pending"; mark as complete or re-queue; then add transaction fix |
-| WAL file grown to GB | LOW | Run `PRAGMA wal_checkpoint(TRUNCATE)` manually via sqlite3 CLI; restart application; add checkpoint scheduling going forward |
-| Cache table missing index (existing production DB) | LOW | Run `CREATE INDEX IF NOT EXISTS` — safe on existing data; SQLite builds index online; no downtime required |
-| httpx PoolTimeout after hours of operation | LOW | Restart the Streamlit server to reset client pool; implement client refresh logic to prevent recurrence |
-| Pattern duplicates causing conflicting matches | MEDIUM | Run dedup query on `pattern_engine` table grouping by `(domain, pattern)`; keep highest-confidence entry; add upsert on write |
+| Salesforce token expires silently, dedup checks skipped | MEDIUM | Detect by auditing enrichment logs for missing SF checks; re-run affected contacts through dedup; add token health monitoring |
+| Hallucinated email content sent to real prospect | HIGH | No technical recovery -- reputational damage is done. Apologize manually. Add mandatory human review to prevent recurrence |
+| Duplicate companies created across sources | MEDIUM | Run dedup migration script: group by normalized domain, merge records, update foreign keys (person.company_id), deduplicate enrichment results. Prevent with ingestion-time dedup |
+| SQLite database locked during concurrent operations | LOW | Implement write queue, set `busy_timeout=5000`, replay failed writes from audit trail. Immediate fix: restart app |
+| Spam-flagged sending domain due to AI email patterns | HIGH | Domain reputation takes 2-4 weeks to recover. Warm up a new domain. Prevent with spam scoring before send |
+| Salesforce API daily limit exhausted | MEDIUM | Wait 24 hours (limit resets) or contact Salesforce for temporary increase. Prevent with local caching and bulk API usage |
+| SOQL injection via crafted import data | HIGH | Audit all SOQL queries for string formatting; switch to parameterized; scan Salesforce audit trail for unauthorized data access |
+| Prompt injection via malicious enrichment data | MEDIUM | Review all generated emails for anomalous content; sanitize the source data; add input sanitization to LLM pipeline |
 
 ---
 
@@ -288,34 +310,36 @@ How roadmap phases should address these pitfalls.
 
 | Pitfall | Prevention Phase | Verification |
 |---------|------------------|--------------|
-| Bare exception refactor still swallowing errors | Phase 1: Security & Hardening | Grep for handlers without log calls; trigger known error conditions and confirm logs appear |
-| Non-atomic budget check + deduction | Phase 1: Security & Hardening | Concurrent test: two sessions against same budget limit; verify no overage |
-| Non-atomic campaign state on crash | Phase 1: Security & Hardening | Kill process mid-batch; verify no orphaned rows; resume from checkpoint cleanly |
-| SQL injection in database.py | Phase 1: Security & Hardening | Audit with grep; send malicious input through all query paths in tests |
-| gather() loading full batch into memory | Phase 2: Performance & Scaling | Memory profiling during 500-row import; confirm flat memory profile during chunked processing |
-| Unshared httpx.AsyncClient | Phase 2: Performance & Scaling | Profiling shows TLS handshake eliminated after first request per provider |
-| Fixed concurrency causing 429 storms | Phase 2: Performance & Scaling | Simulate provider rate limiting; verify adaptive semaphore backs off correctly |
-| WAL file unbounded growth | Phase 2: Performance & Scaling | Monitor WAL file size during 1-hour batch; verify checkpoint scheduling keeps it bounded |
-| Cache table missing index | Phase 2: Performance & Scaling | EXPLAIN QUERY PLAN confirms index usage; cache lookup time constant as table grows |
-| No deduplication before enrichment | Phase 3: New Capabilities | Run two campaigns with shared contacts; confirm second campaign skips already-enriched contacts |
-| SMTP probing triggers spam detection | Phase 1: Security & Hardening | Rate limiter test: 4th probe to same domain in 1 hour is blocked |
-| Pattern duplicates | Phase 3: New Capabilities | Insert duplicate pattern; verify upsert replaces rather than duplicates |
+| OAuth token lifecycle mismanagement | Phase 1: Salesforce Integration | Token works after 24+ hours without manual re-auth; new refresh token persisted after each refresh |
+| SQLite write contention | Phase 1: Infrastructure prep | Run 3 concurrent write workflows (SF sync + enrichment + import), zero `database is locked` errors in 10-minute test |
+| Streamlit OAuth callback failure | Phase 1: Salesforce Integration | OAuth flow works on deployed URL (Railway/Fly.io), not just localhost |
+| Salesforce dedup missing matches | Phase 1: Salesforce Integration | Test with 20 known-duplicate pairs using name variations; hit >90% match rate |
+| Company dedup at ingestion | Phase 1: Company Sourcing | Import identical CSV twice, verify zero new duplicate company rows created |
+| AI hallucination in emails | Phase 2: AI Email Generation | Generate 50 emails; automated check verifies every proper noun traces to input data |
+| Spam filter triggers | Phase 2: AI Email Generation | 10 sample emails all score below 5.0 on SpamAssassin-style heuristic check |
+| CAN-SPAM compliance | Phase 2: AI Email Generation | Every generated email template includes unsubscribe mechanism and physical address |
+| Prompt injection via enrichment data | Phase 2: AI Email Generation | Insert adversarial company description; verify email output is not hijacked or contains injected instructions |
+| Salesforce API rate limits | Phase 1: Salesforce Integration | Sync 10K accounts without hitting daily limit (use bulk API + local cache) |
+| Salesforce token encryption | Phase 1: Salesforce Integration | Verify tokens are not readable in plaintext from SQLite database file |
 
 ---
 
 ## Sources
 
-- Python asyncio official documentation: https://docs.python.org/3/library/asyncio-dev.html
-- PEP 760 — No More Bare Excepts: https://peps.python.org/pep-0760/
-- SQLite WAL mode official documentation: https://sqlite.org/wal.html
-- SQLite performance tuning (phiresky): https://phiresky.github.io/blog/2020/sqlite-performance-tuning/
-- SQLite concurrent writes and "database is locked": https://tenthousandmeters.com/blog/sqlite-concurrent-writes-and-database-is-locked-errors/
-- httpx async support and connection pooling: https://www.python-httpx.org/async/
-- httpx resource limits: https://www.python-httpx.org/advanced/resource-limits/
-- asyncio concurrency limiting patterns: https://death.andgravity.com/limit-concurrency
-- B2B data enrichment mistakes: https://www.slashexperts.com/post/b2b-data-enrichment-mistakes-that-cost-companies-10k-monthly-and-how-to-fix-them
-- Known codebase issues: .planning/codebase/CONCERNS.md (HIGH confidence — direct codebase analysis)
+- [Salesforce OAuth Refresh Token invalid_grant -- Nango](https://nango.dev/blog/salesforce-oauth-refresh-token-invalid-grant) -- token rotation behavior since Spring 2024
+- [Salesforce API Request Limits](https://developer.salesforce.com/docs/atlas.en-us.salesforce_app_limits_cheatsheet.meta/salesforce_app_limits_cheatsheet/salesforce_app_limits_platform_api.htm) -- daily rate limits by edition
+- [Salesforce OAuth 2.0 Flows -- Beyond The Cloud](https://blog.beyondthecloud.dev/blog/salesforce-oauth-2-0-flows-integrate-in-the-right-way) -- JWT Bearer flow as redirect-free alternative
+- [SQLite Concurrent Writes and "database is locked"](https://tenthousandmeters.com/blog/sqlite-concurrent-writes-and-database-is-locked-errors/) -- write contention root cause analysis
+- [Streamlit OAuth Component](https://github.com/dnplus/streamlit-oauth) -- OAuth callback limitations in Streamlit
+- [Streamlit Session State docs](https://docs.streamlit.io/develop/concepts/architecture/session-state) -- session lifetime and loss on tab close
+- [AI Cold Email Is Killing Cold Email -- Rui Nunes](https://ruinunes.com/ai-cold-email/) -- 15% hallucination rate data, 51% of spam is AI-generated
+- [Instantly.ai AI Email Personalization](https://instantly.ai/blog/ai-powered-cold-email-personalization-safe-patterns-prompt-examples-workflow-for-founders/) -- safe prompt patterns, banned phrases
+- [FastCompany: AI Email Spam Mistakes](https://www.fastcompany.com/91037962/the-mistakes-that-send-your-ai-generated-cold-emails-straight-to-spam) -- spam trigger analysis
+- [OWASP LLM01: Prompt Injection](https://genai.owasp.org/llmrisk/llm01-prompt-injection/) -- #1 LLM security risk, mitigation strategies
+- [Entity Resolution Challenges -- Sheshbabu](https://www.sheshbabu.com/posts/entity-resolution-challenges/) -- company name matching, DBA vs legal name issues
+- [simple-salesforce on PyPI](https://pypi.org/project/simple-salesforce/) -- Python Salesforce library with auto-versioning
+- [Salesforce Connected App Token Policy](https://help.salesforce.com/s/articleView?id=sf.connected_app_manage_oauth.htm&language=en_US&type=5) -- refresh token expiration settings
 
 ---
-*Pitfalls research for: Python async B2B enrichment pipeline (Clay-Dupe)*
-*Researched: 2026-03-04*
+*Pitfalls research for: Clay-Dupe v2.0 -- Salesforce integration, AI email generation, multi-source company sourcing*
+*Researched: 2026-03-07*

@@ -1,419 +1,681 @@
-# Architecture Research
+# Architecture: v2.0 Integration — Salesforce, AI Email, Company Sourcing
 
-**Domain:** B2B enrichment pipeline — hardening, performance, and scaling improvements
-**Researched:** 2026-03-04
-**Confidence:** HIGH (derived from direct codebase analysis of existing `.planning/codebase/ARCHITECTURE.md` and `CONCERNS.md`)
+**Domain:** B2B prospecting platform — extending enrichment-only to end-to-end pipeline
+**Researched:** 2026-03-07
+**Confidence:** HIGH (integration points derived from direct codebase analysis; API patterns verified via official docs)
 
-## Standard Architecture
+---
 
-### System Overview
+## Overview
 
-The existing system is a 5-layer waterfall enrichment pipeline. The milestone improvements layer onto this existing structure — they do not reshape it. Each improvement category maps to a specific layer.
+v2.0 adds three capabilities to the existing waterfall enrichment platform:
+
+1. **Salesforce dedup checking** — read-only SOQL queries against Accounts/Contacts to flag or skip duplicates before enrichment
+2. **AI-personalized email generation** — OpenAI API calls using enriched company + contact data to produce cold email drafts
+3. **Multi-source company sourcing** — Apollo search, CSV import, and manual add as lead generation entry points
+
+These features integrate at different points in the existing pipeline and have a strict dependency order. The architecture below specifies exactly which existing files change, which new files are needed, and how data flows through the system.
+
+---
+
+## Current Architecture (Reference)
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                    PRESENTATION LAYER                            │
-│   ┌──────────────────┐          ┌──────────────────┐            │
-│   │   CLI (Typer)    │          │  Web UI (Streamlit)│           │
-│   │  enrich, search  │          │  enrich, results  │           │
-│   │  verify, stats   │          │  analytics, dash  │           │
-│   └────────┬─────────┘          └────────┬──────────┘           │
-├────────────┴────────────────────────────┴────────────────────────┤
-│                  ENRICHMENT PIPELINE LAYER                       │
-│   ┌─────────────────────────────────────────────────────────┐   │
-│   │               WaterfallOrchestrator                      │   │
-│   │  RouteCategory classifier → provider sequence builder   │   │
-│   │  Async semaphore (concurrency) → row chunking [NEW]     │   │
-│   │  Campaign pause/resume state machine [NEW]              │   │
-│   └───────────────────────┬─────────────────────────────────┘   │
-├───────────────────────────┴──────────────────────────────────────┤
-│                 QUALITY & COST CONTROL LAYER                     │
-│   ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
-│   │CircuitBreaker│  │BudgetManager │  │CacheManager [+evict] │  │
-│   │per provider  │  │daily/monthly │  │TTL + active eviction │  │
-│   └──────────────┘  └──────────────┘  └──────────────────────┘  │
-│   ┌──────────────┐  ┌──────────────┐                            │
-│   │EmailVerifier │  │RateLimiter   │                            │
-│   │DNS/SMTP      │  │+domain-level │                            │
-│   │+rate limit   │  │rate limit    │                            │
-│   └──────────────┘  └──────────────┘                            │
-├──────────────────────────────────────────────────────────────────┤
-│                   API PROVIDER LAYER                             │
-│   ┌────────────┐ ┌────────────┐ ┌────────────┐ ┌────────────┐  │
-│   │  Apollo    │ │ Findymail  │ │  Icypeas   │ │ ContactOut │  │
-│   │[hardened]  │ │[hardened]  │ │[hardened]  │ │[hardened]  │  │
-│   └─────┬──────┘ └─────┬──────┘ └─────┬──────┘ └─────┬──────┘  │
-│         └──────────────┴──────────────┴──────────────┘          │
-│                    Shared httpx pool [NEW]                       │
-├──────────────────────────────────────────────────────────────────┤
-│                    DATA ACCESS LAYER                             │
-│   ┌──────────────────────────────────────────────────────────┐  │
-│   │         Database (SQLite WAL mode)                        │  │
-│   │  [parameterized queries] [cache indexes] [audit trail]   │  │
-│   │  tables: companies, people, campaigns, campaign_rows,    │  │
-│   │          enrichment_results, cache, credit_usage,        │  │
-│   │          action_logs [new], api_key_rotations [new]      │  │
-│   └──────────────────────────────────────────────────────────┘  │
-├──────────────────────────────────────────────────────────────────┤
-│                    CONFIGURATION LAYER                           │
-│   settings.py — ProviderConfig, ICPPresets, API keys            │
-│   [+ key rotation state, adaptive concurrency config]           │
-└──────────────────────────────────────────────────────────────────┘
+UI (Streamlit)
+  |
+  v
+CLI (Typer) / UI Pages
+  |
+  v
+Enrichment Layer
+  waterfall.py    — orchestrator (cache -> classify -> route -> execute -> persist)
+  router.py       — per-route provider sequence
+  classifier.py   — row classification into RouteCategory
+  pattern_engine  — email pattern matching
+  |
+  v
+Provider Layer
+  base.py         — BaseProvider ABC (find_email, search_companies, search_people, enrich_company)
+  apollo.py, findymail.py, icypeas.py, datagma.py, contactout.py
+  http_pool.py    — shared httpx.AsyncClient
+  |
+  v
+Quality + Cost Layer
+  confidence.py, verification.py, circuit_breaker.py
+  budget.py, tracker.py, cache.py
+  |
+  v
+Data Layer
+  database.py     — all CRUD (aiosqlite, WAL mode)
+  models.py       — Pydantic v2 models (Company, Person, Campaign, EnrichmentResult, etc.)
+  schema.sql      — 11 tables
+  io.py           — CSV/Excel import/export
+  sync.py         — run_sync() wrapper for Streamlit
 ```
 
-### Component Responsibilities
+---
 
-| Component | Responsibility | Milestone Changes |
+## Integration Architecture
+
+### Feature 1: Salesforce Dedup Checking
+
+**Where it plugs in:** Between row classification (step 2) and provider execution (step 4) in `WaterfallOrchestrator.enrich_single()`. This is the same insertion point as cross-campaign dedup (step 1b) — Salesforce dedup is a pre-enrichment gate.
+
+**New files:**
+
+| File | Purpose |
+|------|---------|
+| `integrations/__init__.py` | New top-level package for external CRM integrations |
+| `integrations/salesforce.py` | `SalesforceChecker` class — SOQL queries via `simple-salesforce` |
+| `data/models.py` (MODIFY) | Add `SalesforceMatch` model, add `sf_account_id`/`sf_contact_id`/`sf_status` fields to `Person` and `Company` |
+| `data/schema.sql` (MODIFY) | Add `sf_account_id`, `sf_contact_id`, `sf_status` columns to `people` and `companies` tables; add `salesforce_config` table |
+| `data/database.py` (MODIFY) | Add `get_sf_config()`, `save_sf_config()`, `mark_sf_duplicate()` methods |
+| `enrichment/waterfall.py` (MODIFY) | Add Salesforce check step between dedup check (1b) and classify (2) |
+| `config/settings.py` (MODIFY) | Add `SalesforceConfig` model with instance_url, credentials, dedup_strategy |
+| `ui/pages/settings.py` (MODIFY) | Add Salesforce connection config UI section |
+| `ui/pages/enrich.py` (MODIFY) | Show SF duplicate status column in results |
+
+**Component design — `SalesforceChecker`:**
+
+```python
+# integrations/salesforce.py
+from simple_salesforce import Salesforce
+from dataclasses import dataclass
+from typing import Optional
+
+@dataclass
+class SalesforceMatch:
+    """Result of a Salesforce dedup check."""
+    found_account: bool = False
+    found_contact: bool = False
+    account_id: Optional[str] = None
+    account_name: Optional[str] = None
+    contact_id: Optional[str] = None
+    contact_email: Optional[str] = None
+    account_owner: Optional[str] = None
+
+class SalesforceChecker:
+    """Read-only Salesforce integration for duplicate checking.
+
+    NOT a BaseProvider subclass — this is not an enrichment provider.
+    It is a pre-enrichment gate that checks if a prospect already exists
+    in the CRM before spending credits on enrichment.
+    """
+
+    def __init__(self, instance_url: str, username: str, password: str,
+                 security_token: str):
+        self._sf = Salesforce(
+            instance_url=instance_url,
+            username=username,
+            password=password,
+            security_token=security_token,
+        )
+        self._cache: dict[str, SalesforceMatch] = {}  # domain -> match
+
+    def check_company(self, domain: str) -> SalesforceMatch:
+        """SOQL: SELECT Id, Name, OwnerId FROM Account WHERE Website LIKE '%domain%'"""
+        ...
+
+    def check_contact(self, email: str) -> SalesforceMatch:
+        """SOQL: SELECT Id, Email, AccountId FROM Contact WHERE Email = :email"""
+        ...
+
+    def check_batch(self, domains: list[str]) -> dict[str, SalesforceMatch]:
+        """Batch check using SOQL IN clause. Max 200 per query (SF limit)."""
+        ...
+```
+
+**Critical design decision: NOT a BaseProvider.** Salesforce is not an enrichment data source in this system — it is a dedup gate. It does not implement `find_email()`, `search_companies()`, or `enrich_company()`. Making it a provider would pollute the waterfall with a fundamentally different concern (checking if data already exists vs. finding new data). It lives in a separate `integrations/` package.
+
+**Waterfall integration point:**
+
+```python
+# In WaterfallOrchestrator.enrich_single(), after cross-campaign dedup (step 1b):
+
+# --- 1c. Salesforce dedup check ---
+if self.sf_checker and domain:
+    sf_match = self.sf_checker.check_company(domain)
+    if sf_match.found_account:
+        if self.sf_dedup_strategy == "skip":
+            return self._sf_skip_result(sf_match, ...)
+        elif self.sf_dedup_strategy == "flag":
+            row["_sf_duplicate"] = True
+            row["_sf_account_id"] = sf_match.account_id
+            # Continue to enrichment but flag the result
+```
+
+**Dedup strategy options:**
+- `skip` — Do not enrich. Return immediately with SF match data. Zero credit cost.
+- `flag` — Enrich normally but tag the result with SF account/contact IDs. User reviews flagged rows post-enrichment.
+- `off` — Ignore Salesforce entirely. Default for campaigns where SF is not configured.
+
+**Batch optimization:** For batch enrichment, pre-fetch all SF matches in one SOQL query before entering the per-row waterfall loop. The `check_batch()` method uses `WHERE Website IN (...)` with chunks of 200 (Salesforce SOQL limit). Cache results in-memory for the batch duration.
+
+---
+
+### Feature 2: AI-Personalized Email Generation
+
+**Where it plugs in:** Post-enrichment. This is a downstream consumer of enriched Company + Person data, not part of the waterfall. It runs after enrichment completes and the results are persisted.
+
+**New files:**
+
+| File | Purpose |
+|------|---------|
+| `outreach/__init__.py` | New top-level package for outreach generation |
+| `outreach/email_generator.py` | `EmailGenerator` class — OpenAI API calls for email drafts |
+| `outreach/templates.py` | Prompt templates and personalization variable mapping |
+| `outreach/models.py` | `EmailDraft` Pydantic model |
+| `data/schema.sql` (MODIFY) | Add `email_drafts` table |
+| `data/database.py` (MODIFY) | Add `save_email_draft()`, `get_drafts_by_campaign()` methods |
+| `data/models.py` (MODIFY) | Add `EmailDraft` model |
+| `config/settings.py` (MODIFY) | Add `OpenAIConfig` (api_key, model, temperature, max_tokens) |
+| `ui/pages/outreach.py` (NEW) | Email generation UI — select campaign, generate, review, export |
+| `ui/app.py` (MODIFY) | Add outreach page to navigation |
+
+**Component design — `EmailGenerator`:**
+
+```python
+# outreach/email_generator.py
+from openai import AsyncOpenAI
+from outreach.models import EmailDraft
+from outreach.templates import build_prompt
+
+class EmailGenerator:
+    """Generate personalized cold emails from enriched data using OpenAI."""
+
+    def __init__(self, api_key: str, model: str = "gpt-4o-mini",
+                 temperature: float = 0.7):
+        self._client = AsyncOpenAI(api_key=api_key)
+        self._model = model
+        self._temperature = temperature
+
+    async def generate_single(
+        self,
+        person: Person,
+        company: Company,
+        template_name: str = "cold_intro",
+        custom_instructions: str = "",
+    ) -> EmailDraft:
+        """Generate one personalized email for a person at a company."""
+        prompt = build_prompt(
+            person=person,
+            company=company,
+            template_name=template_name,
+            custom_instructions=custom_instructions,
+        )
+        response = await self._client.chat.completions.create(
+            model=self._model,
+            messages=[
+                {"role": "system", "content": prompt.system},
+                {"role": "user", "content": prompt.user},
+            ],
+            temperature=self._temperature,
+            max_tokens=500,
+        )
+        return EmailDraft(
+            person_id=person.id,
+            company_id=company.id,
+            subject=self._extract_subject(response),
+            body=self._extract_body(response),
+            template_used=template_name,
+            model_used=self._model,
+            tokens_used=response.usage.total_tokens,
+        )
+
+    async def generate_batch(
+        self,
+        rows: list[tuple[Person, Company]],
+        template_name: str = "cold_intro",
+        concurrency: int = 5,
+    ) -> list[EmailDraft]:
+        """Generate emails for multiple person-company pairs with rate limiting."""
+        ...
+```
+
+**Why gpt-4o-mini:** Cost-effective for short-form email generation (~$0.15/1M input tokens, ~$0.60/1M output tokens). A 500-token cold email costs roughly $0.0004 per generation. For 10K contacts that is approximately $4 total — negligible vs. enrichment costs. If quality is insufficient, upgrade to gpt-4o for specific templates.
+
+**Template system design:**
+
+```python
+# outreach/templates.py
+TEMPLATES = {
+    "cold_intro": PromptTemplate(
+        system="You are a B2B sales development representative...",
+        user_template="""
+Write a personalized cold email to {person.first_name} {person.last_name},
+{person.title} at {company.name}.
+
+Company context:
+- Industry: {company.industry}
+- Size: {company.employee_count} employees
+- Location: {company.city}, {company.state}
+- Description: {company.description}
+
+{custom_instructions}
+
+Requirements:
+- Subject line (under 50 chars, no clickbait)
+- 3-4 sentences max
+- Reference something specific about their company
+- Clear, non-pushy CTA
+""",
+    ),
+    "follow_up": ...,
+    "referral_ask": ...,
+}
+```
+
+**Key constraint: No Outreach.io API integration (out of scope per PROJECT.md).** Generated emails are stored locally and exported via CSV for manual import into Outreach.io sequences. The `email_drafts` table stores all generated emails with their metadata.
+
+**Data flow:**
+
+```
+Enrichment complete (Person + Company in DB)
+  |
+  v
+User selects campaign in Outreach UI page
+  |
+  v
+EmailGenerator.generate_batch() — calls OpenAI for each person-company pair
+  |
+  v
+EmailDraft stored in email_drafts table
+  |
+  v
+User reviews/edits drafts in UI
+  |
+  v
+Export to CSV (columns: email, first_name, subject, body) for Outreach.io import
+```
+
+---
+
+### Feature 3: Multi-Source Company Sourcing
+
+**Where it plugs in:** Upstream of enrichment. Company sourcing produces the input rows that feed into the waterfall. Currently, the only entry point is CSV import (via `data/io.py`). This feature adds Apollo search and manual entry as additional input sources.
+
+**New files:**
+
+| File | Purpose |
+|------|---------|
+| `sourcing/__init__.py` | New top-level package for company/lead sourcing |
+| `sourcing/apollo_sourcer.py` | Wraps `ApolloProvider.search_companies()` with ICP filtering |
+| `sourcing/csv_sourcer.py` | Refactor of existing `data/io.py` CSV import logic |
+| `sourcing/manual_sourcer.py` | Manual company/contact add via form input |
+| `sourcing/pipeline.py` | `SourcingPipeline` — unified interface for all sourcing methods |
+| `ui/pages/sourcing.py` (NEW) | Company sourcing UI — search, import, manual add |
+| `ui/app.py` (MODIFY) | Add sourcing page to navigation, reorder nav |
+
+**No new provider implementation needed.** Apollo's `search_companies()` and `search_people()` methods already exist in `providers/apollo.py`. The sourcing layer wraps these existing methods with ICP preset application and result persistence.
+
+**Component design — `SourcingPipeline`:**
+
+```python
+# sourcing/pipeline.py
+from data.database import Database
+from data.models import Company, Person
+from providers.apollo import ApolloProvider
+from config.settings import ICPPreset
+
+class SourcingPipeline:
+    """Unified company/lead sourcing from multiple channels."""
+
+    def __init__(self, db: Database, apollo: ApolloProvider):
+        self.db = db
+        self.apollo = apollo
+
+    async def search_apollo(
+        self,
+        icp_preset: ICPPreset,
+        max_results: int = 100,
+    ) -> list[Company]:
+        """Search Apollo using ICP preset filters. Returns Company models."""
+        companies = await self.apollo.search_companies(
+            organization_num_employees_ranges=[
+                f"{icp_preset.employee_min},{icp_preset.employee_max}"
+            ],
+            q_organization_keyword_tags=icp_preset.keywords,
+        )
+        # Persist to companies table
+        for company in companies:
+            await self.db.upsert_company(company)
+        return companies
+
+    async def import_csv(self, file_path: str, column_mapping: dict) -> list[Company]:
+        """Import companies from CSV. Reuses existing io.py logic."""
+        ...
+
+    async def add_manual(self, company: Company) -> Company:
+        """Add a single company manually via form input."""
+        await self.db.upsert_company(company)
+        return company
+
+    async def source_people_for_companies(
+        self,
+        companies: list[Company],
+        title_filters: list[str],
+        seniority_filters: list[str],
+    ) -> list[Person]:
+        """For each sourced company, find decision-makers via Apollo search."""
+        people = []
+        for company in companies:
+            if company.domain:
+                results = await self.apollo.search_people(
+                    q_organization_domains_list=[company.domain],
+                    person_titles=title_filters,
+                    person_seniorities=seniority_filters,
+                )
+                for person in results:
+                    person.company_id = company.id
+                    await self.db.upsert_person(person)
+                    people.append(person)
+        return people
+```
+
+**Relationship to existing components:**
+
+- `SourcingPipeline` wraps `ApolloProvider.search_companies()` and `search_people()` — these are FREE Apollo API calls (no credits consumed)
+- Results flow into the same `companies` and `people` tables used by enrichment
+- After sourcing, the user creates a campaign from sourced companies/people and runs enrichment via the existing waterfall
+- ICP presets (`config/settings.py`) already exist and are used directly
+
+---
+
+## Modified Existing Files Summary
+
+| File | What Changes | Why |
+|------|-------------|-----|
+| `config/settings.py` | Add `SalesforceConfig`, `OpenAIConfig` models; add to `Settings` | New credentials and configuration for SF and AI |
+| `data/models.py` | Add `SalesforceMatch`, `EmailDraft` models; add `sf_*` fields to Person/Company | New data types for dedup results and email drafts |
+| `data/schema.sql` | Add `email_drafts` table, `salesforce_config` table; add SF columns to people/companies | Persist new data types |
+| `data/database.py` | Add methods for SF config, email drafts, company upsert | CRUD for new features |
+| `enrichment/waterfall.py` | Add `sf_checker` parameter and SF dedup step between 1b and 2 | Pre-enrichment gate |
+| `ui/app.py` | Add sourcing and outreach pages to navigation | New UI entry points |
+| `ui/pages/settings.py` | Add SF config section, OpenAI config section | Credential management |
+| `ui/pages/enrich.py` | Show SF duplicate status in results table | Surface dedup flags |
+
+## New Files Summary
+
+| File | Package | Purpose |
+|------|---------|---------|
+| `integrations/__init__.py` | integrations | External CRM connections |
+| `integrations/salesforce.py` | integrations | SalesforceChecker -- SOQL dedup queries |
+| `outreach/__init__.py` | outreach | Email generation |
+| `outreach/email_generator.py` | outreach | OpenAI-powered email drafting |
+| `outreach/templates.py` | outreach | Prompt templates and variable mapping |
+| `outreach/models.py` | outreach | EmailDraft Pydantic model |
+| `sourcing/__init__.py` | sourcing | Company/lead sourcing |
+| `sourcing/apollo_sourcer.py` | sourcing | Apollo search wrapper with ICP filtering |
+| `sourcing/csv_sourcer.py` | sourcing | Refactored CSV import |
+| `sourcing/manual_sourcer.py` | sourcing | Manual add via form |
+| `sourcing/pipeline.py` | sourcing | Unified sourcing interface |
+| `ui/pages/sourcing.py` | ui | Sourcing UI page |
+| `ui/pages/outreach.py` | ui | Email generation UI page |
+
+---
+
+## Data Flow: End-to-End v2.0 Pipeline
+
+```
+SOURCING (new)
+  Apollo Search --------+
+  CSV Import -----------+---> companies + people tables
+  Manual Add -----------+
+
+SALESFORCE DEDUP (new)
+  Pre-enrichment batch check ---> flag or skip duplicates
+
+ENRICHMENT (existing)
+  Waterfall: cache -> classify -> [SF dedup check] -> route -> provider cascade -> persist
+
+AI EMAIL GENERATION (new)
+  Post-enrichment: enriched Person + Company ---> OpenAI ---> email_drafts table
+
+EXPORT (existing + extended)
+  CSV export with email columns + SF status + generated email drafts
+```
+
+---
+
+## Database Schema Changes
+
+### New table: `email_drafts`
+
+```sql
+CREATE TABLE IF NOT EXISTS email_drafts (
+    id              TEXT PRIMARY KEY,
+    person_id       TEXT REFERENCES people(id) ON DELETE CASCADE,
+    company_id      TEXT REFERENCES companies(id) ON DELETE SET NULL,
+    campaign_id     TEXT REFERENCES campaigns(id) ON DELETE SET NULL,
+    subject         TEXT NOT NULL,
+    body            TEXT NOT NULL,
+    template_used   TEXT,
+    model_used      TEXT,
+    tokens_used     INTEGER,
+    status          TEXT DEFAULT 'draft',  -- draft, approved, exported
+    edited_body     TEXT,                  -- user-edited version
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    exported_at     TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS ix_email_drafts_campaign
+    ON email_drafts(campaign_id);
+CREATE INDEX IF NOT EXISTS ix_email_drafts_person
+    ON email_drafts(person_id);
+CREATE INDEX IF NOT EXISTS ix_email_drafts_status
+    ON email_drafts(status);
+```
+
+### New table: `salesforce_config`
+
+```sql
+CREATE TABLE IF NOT EXISTS salesforce_config (
+    id              TEXT PRIMARY KEY DEFAULT 'default',
+    instance_url    TEXT NOT NULL,
+    username        TEXT NOT NULL,
+    -- password/token stored in .env, not in DB
+    dedup_strategy  TEXT DEFAULT 'flag',   -- skip, flag, off
+    last_connected  TIMESTAMP,
+    is_active       BOOLEAN DEFAULT 1
+);
+```
+
+### Modified columns on `people`
+
+```sql
+ALTER TABLE people ADD COLUMN sf_contact_id TEXT;
+ALTER TABLE people ADD COLUMN sf_account_id TEXT;
+ALTER TABLE people ADD COLUMN sf_status TEXT DEFAULT 'not_checked';
+-- sf_status values: not_checked, clean, duplicate_account, duplicate_contact
+```
+
+### Modified columns on `companies`
+
+```sql
+ALTER TABLE companies ADD COLUMN sf_account_id TEXT;
+ALTER TABLE companies ADD COLUMN sf_status TEXT DEFAULT 'not_checked';
+```
+
+---
+
+## Component Boundaries
+
+| Component | Responsibility | Communicates With |
 |-----------|---------------|-------------------|
-| WaterfallOrchestrator | Coordinate single-row and batch enrichment | Add chunking strategy, adaptive concurrency, pause/resume |
-| RouteCategory | Classify input rows to enrichment path | No change — classification is sound |
-| BaseProvider / each provider | Abstract HTTP calls to external APIs | Harden: typed exceptions, input validation, `.get()` fallbacks |
-| Shared httpx pool | HTTP connection management | New: replace per-provider clients with shared pool |
-| CacheManager | TTL-based result caching | Add active eviction job and SQLite indexes on lookup columns |
-| BudgetManager | Daily/monthly spend enforcement | Make budget check + credit deduction atomic |
-| CircuitBreaker | Provider failure detection | No change — existing implementation is sound |
-| EmailVerifier | DNS/SMTP email verification | Add per-domain rate limiting |
-| Database | SQLite WAL persistence | Parameterize all queries; add audit_log table; add cache indexes |
-| Settings | Configuration loading | Add key rotation config and adaptive concurrency thresholds |
+| `SourcingPipeline` | Find and persist target companies/people | ApolloProvider, Database, io.py |
+| `SalesforceChecker` | Check CRM for existing accounts/contacts | Salesforce API (simple-salesforce), Database |
+| `WaterfallOrchestrator` (modified) | Enrichment pipeline with SF dedup gate | SalesforceChecker, all existing deps |
+| `EmailGenerator` | Generate personalized emails from enriched data | OpenAI API, Database |
+| `PromptTemplates` | Map enriched fields to prompt variables | EmailGenerator |
 
-## Recommended Project Structure
+**Boundary rule:** Each new component owns its own external API connection. SalesforceChecker owns the `simple-salesforce` client. EmailGenerator owns the `openai` AsyncClient. Neither is injected through the provider layer.
 
-The existing directory structure is retained. Improvements inject into existing files and add focused new modules:
+---
 
-```
-project/
-├── providers/
-│   ├── base.py              # [harden] add InputValidator helper, typed exceptions
-│   ├── apollo.py            # [harden] specific exceptions, .get() fallbacks, validated inputs
-│   ├── findymail.py         # [harden] same pattern as apollo
-│   ├── icypeas.py           # [harden] same pattern as apollo
-│   ├── contactout.py        # [harden] same pattern as apollo
-│   └── http_pool.py         # [NEW] shared httpx AsyncClient factory + lifecycle
-│
-├── enrichment/
-│   ├── waterfall.py         # [perf] chunking, adaptive concurrency, pause/resume
-│   ├── router.py            # no change
-│   ├── classifier.py        # no change
-│   └── pattern_engine.py    # [fix] dedup patterns per domain
-│
-├── quality/
-│   ├── verification.py      # [harden] per-domain rate limiting on SMTP probing
-│   ├── confidence.py        # no change
-│   └── circuit_breaker.py   # no change
-│
-├── cost/
-│   ├── budget.py            # [harden] atomic budget check+deduct; A/B test hooks
-│   ├── tracker.py           # [harden] audit trail writes
-│   └── cache.py             # [scale] active eviction + index enforcement
-│
-├── data/
-│   └── database.py          # [harden] parameterized queries; audit_log table; cache indexes
-│
-└── config/
-    └── settings.py          # [new] key rotation config, adaptive concurrency thresholds
-```
+## Patterns to Follow
 
-### Structure Rationale
+### Pattern 1: Pre-Enrichment Gate (Salesforce)
 
-- **providers/http_pool.py:** Isolated module for shared client lifecycle avoids changing provider constructor signatures significantly. Pool is initialized once at app startup and injected.
-- **cost/cache.py:** Active eviction logic belongs here rather than `data/database.py` — it is a policy decision, not a storage concern.
-- **data/database.py:** All parameterization and schema changes land here; audit_log table created alongside existing schema init.
-- **No new top-level folders:** This milestone is an improvement pass, not a structural reorganization. Keeping changes inside existing module boundaries minimizes regression risk.
+**What:** Check an external system before spending enrichment credits. If match found, either skip (save credits) or flag (enrich but annotate).
 
-## Architectural Patterns
+**When:** Any pre-enrichment validation against external data. Salesforce is the first instance; future: HubSpot, Pipedrive.
 
-### Pattern 1: Layered Hardening (Providers)
+**Implementation:**
+- Batch pre-fetch at campaign start (not per-row queries)
+- In-memory cache for batch duration (domain -> SalesforceMatch)
+- Configurable strategy: skip/flag/off per campaign
+- Non-blocking: SF API failure should not block enrichment (log warning, continue)
 
-**What:** Apply a uniform defensive pattern inside each provider method: validate input → call API with specific typed exception handling → parse response with `.get()` fallbacks → return ProviderResponse.
+### Pattern 2: Post-Enrichment Processor (AI Email)
 
-**When to use:** Every provider method that accepts user-influenced data and calls an external API.
+**What:** Consume enriched data to produce derived outputs. Runs after enrichment completes, not during the waterfall.
 
-**Trade-offs:** Small boilerplate increase per method in exchange for eliminated silent failures and debuggable error traces.
+**When:** Any feature that transforms enriched data into deliverables. Email generation is the first instance; future: report generation, CRM push.
 
-**Example:**
-```python
-# Before (fragile)
-async def find_email(self, first_name: str, last_name: str, domain: str) -> ProviderResponse:
-    try:
-        resp = await self.client.post("/find", json={"first": first_name, "domain": domain})
-        return ProviderResponse(email=resp.json()["email"], found=True)
-    except Exception as e:
-        logger.error(f"find_email failed: {e}")
-        return ProviderResponse(found=False)
+**Implementation:**
+- Triggered explicitly by user action (not automatic)
+- Reads from companies + people tables (never from raw provider responses)
+- Writes to its own table (email_drafts), not enrichment_results
+- Rate-limited independently (OpenAI has separate rate limits from enrichment providers)
 
-# After (hardened)
-async def find_email(self, first_name: str, last_name: str, domain: str) -> ProviderResponse:
-    domain = InputValidator.validate_domain(domain)      # raises ValueError on bad input
-    first_name = InputValidator.sanitize_name(first_name)
-    try:
-        resp = await self.client.post("/find", json={"first": first_name, "domain": domain})
-        resp.raise_for_status()
-        data = resp.json()
-        return ProviderResponse(
-            email=data.get("email"),
-            found=bool(data.get("email")),
-        )
-    except httpx.TimeoutException as e:
-        logger.warning("find_email timeout for %s: %s", domain, e)
-        return ProviderResponse(found=False, error=str(e))
-    except httpx.HTTPStatusError as e:
-        logger.warning("find_email HTTP %s for %s", e.response.status_code, domain)
-        return ProviderResponse(found=False, error=str(e))
-    except ValueError as e:
-        logger.error("find_email invalid input: %s", e)
-        return ProviderResponse(found=False, error=str(e))
-```
+### Pattern 3: Upstream Sourcing (Company Search)
 
-### Pattern 2: Chunk-and-Semaphore Batch Processing
+**What:** Generate the input rows that feed the enrichment pipeline. Currently only CSV import exists.
 
-**What:** Split large row lists into fixed-size chunks. Process one chunk at a time. Within each chunk, apply the existing asyncio.Semaphore to bound concurrency. Yield progress between chunks.
+**When:** Any new lead generation channel.
 
-**When to use:** Batch enrichment for any input exceeding a configurable threshold (e.g., 100 rows).
+**Implementation:**
+- All sources produce Company/Person models (same Pydantic types)
+- All sources persist to the same companies/people tables
+- Sourcing is separate from enrichment -- source first, create campaign, then enrich
+- ICP presets (already exist) drive search filters
 
-**Trade-offs:** Slightly higher total latency for small batches; dramatically lower memory pressure and more responsive pause/resume for large batches (500+ rows).
+---
 
-**Example:**
-```python
-CHUNK_SIZE = 100  # configurable via Settings
+## Anti-Patterns to Avoid
 
-async def enrich_batch(self, rows: list[InputRow], campaign_id: int) -> list[EnrichmentResult]:
-    results = []
-    chunks = [rows[i:i+CHUNK_SIZE] for i in range(0, len(rows), CHUNK_SIZE)]
-    for chunk_idx, chunk in enumerate(chunks):
-        if await self._is_paused(campaign_id):
-            await self._wait_for_resume(campaign_id)
-        chunk_results = await self._process_chunk(chunk, campaign_id)
-        results.extend(chunk_results)
-        await self._checkpoint_campaign(campaign_id, processed=len(results))
-    return results
-```
+### Anti-Pattern 1: Making Salesforce a BaseProvider
 
-### Pattern 3: Shared HTTP Connection Pool
+**What:** Implementing SalesforceChecker as a subclass of BaseProvider.
 
-**What:** A single `httpx.AsyncClient` (or a small pool) created at application startup, shared across all provider instances. Each provider receives the client via constructor injection.
+**Why bad:** BaseProvider defines enrichment operations (find_email, search_companies, enrich_company). Salesforce does not find emails or enrich data -- it checks for duplicates. Forcing it into BaseProvider would require stub implementations of methods it does not support, and it would appear in waterfall provider sequences where it does not belong.
 
-**When to use:** Any async provider making repeated outbound HTTP calls to the same or different hosts.
+**Instead:** Separate `integrations/` package. SalesforceChecker is injected into WaterfallOrchestrator as an optional dependency, not as a provider in the waterfall sequence.
 
-**Trade-offs:** Requires coordinated lifecycle management (startup/shutdown). Reduces TCP handshake overhead and avoids file-descriptor exhaustion on large batches.
+### Anti-Pattern 2: Calling OpenAI During Enrichment
 
-**Example:**
-```python
-# http_pool.py
-_shared_client: httpx.AsyncClient | None = None
+**What:** Generating emails inside the waterfall loop as each person is enriched.
 
-def get_shared_client() -> httpx.AsyncClient:
-    global _shared_client
-    if _shared_client is None:
-        _shared_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(30.0, connect=5.0),
-            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
-        )
-    return _shared_client
+**Why bad:** Enrichment is credit-sensitive and resumable. Mixing AI generation into the waterfall means: (1) email generation failures affect enrichment resume state, (2) paused campaigns have partially generated emails with no clear resume point, (3) the cost model becomes entangled (enrichment credits + AI tokens in the same budget tracking).
 
-async def close_shared_client() -> None:
-    global _shared_client
-    if _shared_client:
-        await _shared_client.aclose()
-        _shared_client = None
-```
+**Instead:** Email generation is a post-enrichment step. User clicks "Generate Emails" after enrichment completes. Separate cost tracking. Separate error handling.
 
-### Pattern 4: Active Cache Eviction (Background Job)
+### Anti-Pattern 3: Tight Coupling Between Sourcing and Enrichment
 
-**What:** A periodic coroutine (or triggered on-demand before batch start) that DELETEs rows from the `cache` table where `expires_at < now()` AND optionally where total row count exceeds a configurable maximum (LRU eviction by `last_accessed`).
+**What:** Auto-triggering enrichment when companies are sourced.
 
-**When to use:** Long-running deployments where cache table would otherwise grow unboundedly.
+**Why bad:** Sourcing is exploratory -- users search, filter, review results, remove unwanted companies, then decide to enrich. Auto-enrichment wastes credits on companies the user would have filtered out. It also makes the cost model unpredictable.
 
-**Trade-offs:** Requires a scheduled trigger (background asyncio task or pre-batch hook). Adds write contention to SQLite during eviction windows — mitigated by running eviction during low-activity periods or with a row-limit cap per eviction pass.
+**Instead:** Source -> Review -> Create Campaign -> Enrich. Each step is explicit. The user controls when credits are spent.
 
-### Pattern 5: Parameterized Query Enforcement
+---
 
-**What:** All `database.py` queries use `?` placeholders with parameter tuples. No string formatting of user-controlled values into SQL strings.
+## Suggested Build Order
 
-**When to use:** Every query. No exceptions.
+The three features have clear dependencies that dictate implementation order:
 
-**Trade-offs:** Slightly more verbose query construction. Eliminates SQL injection surface completely.
+### Phase 1: Company Sourcing (Foundation)
 
-## Data Flow
+**Build first because:** It creates the input data everything else needs. Without sourced companies/people in the database, there is nothing to dedup against Salesforce and nothing to generate emails for. Also, this feature has the lowest technical risk -- it wraps existing Apollo API methods that already work.
 
-### Single-Row Enrichment (with hardening applied)
+**Delivers:**
+- `sourcing/` package (pipeline, apollo_sourcer, csv_sourcer, manual_sourcer)
+- `ui/pages/sourcing.py` -- search companies, import CSV, add manually
+- `data/database.py` additions -- `upsert_company()`, `upsert_person()` if not present
+- Wired into existing ICP presets from `config/settings.py`
+
+**Integration points:**
+- Wraps `ApolloProvider.search_companies()` and `search_people()` (existing, free calls)
+- Persists to existing `companies` and `people` tables
+- No changes to waterfall or enrichment pipeline
+
+**Estimated scope:** ~5-8 new files, minimal modification to existing files.
+
+### Phase 2: Salesforce Integration
+
+**Build second because:** Requires companies/people in the database to check against (Phase 1 provides these). Must be integrated before email generation -- users need to know which contacts are SF duplicates before generating emails for them.
+
+**Delivers:**
+- `integrations/` package with SalesforceChecker
+- Schema changes: SF columns on people/companies, salesforce_config table
+- Waterfall modification: SF dedup step between 1b and 2
+- Settings UI: SF connection config
+- Enrich UI: SF status column
+
+**Integration points:**
+- Injected into WaterfallOrchestrator as optional `sf_checker` parameter
+- Batch pre-fetch in `enrich_batch()` before entering per-row loop
+- Non-blocking: SF failures log warnings, do not block enrichment
+
+**Estimated scope:** ~4-5 new files, modifications to waterfall.py, settings.py, models.py, schema.sql, database.py, and 2 UI pages.
+
+### Phase 3: AI Email Generation
+
+**Build last because:** It consumes the output of both sourcing (companies/people data) and enrichment (verified emails, enriched company details). Also depends on knowing SF duplicate status -- generating emails for contacts that are SF duplicates is wasteful.
+
+**Delivers:**
+- `outreach/` package with EmailGenerator, templates, models
+- Schema changes: email_drafts table
+- New UI page: outreach (generate, review, edit, export)
+- CSV export extension: include generated email columns
+
+**Integration points:**
+- Reads from companies + people tables (post-enrichment)
+- Reads SF status to exclude/warn about duplicates
+- Writes to email_drafts table
+- Export via extended `data/io.py`
+
+**Estimated scope:** ~5-6 new files, modifications to schema.sql, database.py, models.py, io.py, app.py, and 1 new UI page.
+
+---
+
+## Build Order Rationale
 
 ```
-User input (CSV row or UI form)
-    ↓
-[InputValidator] — validate domain, sanitize names
-    ↓
-[CacheManager.lookup()] — parameterized query on indexed columns
-    ↓ (cache miss)
-[RouteClassifier] — determine RouteCategory
-    ↓
-[WaterfallOrchestrator] — build provider sequence
-    ↓
-For each provider step:
-    [BudgetManager.check()] — atomic budget gate
-    [CircuitBreaker.is_open()] — skip if tripped
-    [RateLimiter.acquire()] — sliding window slot
-    [ProviderN.find_email()] — hardened: validated inputs, typed exceptions, .get() fallbacks
-    ↓ (on success)
-    [CacheManager.store()] — write result with TTL
-    [Database.upsert_person()] — parameterized write
-    [AuditLogger.record()] — write action_log row
-    [BudgetManager.deduct()] — atomic: same txn as record
-    ↓
-[EnrichmentResult] → returned to caller
+Phase 1: Sourcing ---> Phase 2: Salesforce ---> Phase 3: AI Email
+     |                      |                      |
+     v                      v                      v
+  Companies/People     SF dedup flags          Email drafts
+  in database          on enriched data        from enriched+deduped data
 ```
 
-### Batch Enrichment (with chunking applied)
+- **Sourcing before Salesforce:** SF dedup checks need data to check. Without sourced companies, the SF checker has nothing to query against.
+- **Salesforce before AI Email:** Email generation should respect SF dedup status. Generating emails for SF duplicates wastes OpenAI tokens and creates confusing output.
+- **Each phase is independently deployable.** Phase 1 is useful without Phase 2 or 3. Phase 2 is useful without Phase 3. This enables incremental delivery and testing with real data between phases.
 
-```
-Campaign rows (N rows, potentially 500+)
-    ↓
-[CacheEviction.evict_expired()] — pre-batch cleanup pass
-    ↓
-[Chunker] — split into CHUNK_SIZE groups
-    ↓ (for each chunk)
-[PauseCheck] — check campaign_state before each chunk
-    ↓
-[asyncio.Semaphore(adaptive_limit)] — bound concurrency per chunk
-    ↓ (concurrent within semaphore)
-[enrich_single(row)] — full single-row flow per row
-    ↓
-[Checkpoint] — persist chunk completion to campaign_rows
-    ↓
-Accumulate results → Campaign marked complete
-```
+---
 
-### Key Data Flows
+## Scalability Considerations
 
-1. **Hardening flow:** User input → InputValidator → provider → typed exception boundary → ProviderResponse. Validation errors short-circuit before any API call, saving credits.
+| Concern | At 100 companies | At 1K companies | At 10K companies |
+|---------|-------------------|------------------|-------------------|
+| SF dedup | Single SOQL query | 5 batched queries (200/query limit) | 50 batched queries; consider caching SF accounts locally |
+| AI email generation | Sequential, ~30sec | Concurrent (5 parallel), ~5min | Concurrent (10 parallel), ~30min; consider gpt-4o-mini batch API |
+| Apollo sourcing | 1-4 API calls | 10-40 API calls, paginated | 100+ API calls; Apollo rate limit (50/min) becomes bottleneck |
+| Database | No concern | No concern | Add indexes on sf_account_id, consider email_drafts archiving |
 
-2. **Cache eviction flow:** Background task or pre-batch trigger → DELETE expired rows → if row count > max_rows, DELETE oldest by last_accessed → commit. Runs in its own transaction outside of enrichment path.
-
-3. **Audit trail flow:** Every successful API call → AuditLogger writes (campaign_id, provider, method, credits_used, timestamp, row_id) to `action_logs`. Happens inside the same DB transaction as credit deduction for consistency.
-
-4. **Pause/resume flow:** Campaign state stored in `campaigns` table (RUNNING / PAUSED / COMPLETE). Between chunks, orchestrator checks state. UI writes PAUSED; orchestrator reads it on next chunk boundary and suspends. Resume writes RUNNING; orchestrator resumes on next polling cycle.
-
-## Scaling Considerations
-
-This is a self-hosted, team-size tool. The relevant scale is 1-5 concurrent users and batch sizes up to ~5,000 rows. PostgreSQL migration is explicitly out of scope.
-
-| Concern | Current | After Milestone |
-|---------|---------|----------------|
-| Batch memory | Full row list in memory | Chunked: CHUNK_SIZE rows at a time |
-| Cache table size | Unbounded growth | Bounded by eviction policy + index |
-| HTTP connections | N providers × M batch workers | Shared pool: bounded by pool limits |
-| SQLite write contention | Unmitigated on concurrent writes | Improved: audit + budget deductions in single transactions |
-| Concurrency limits | Hardcoded semaphore(5) | Adaptive: configurable per-provider rate limits |
-
-### Scaling Priorities
-
-1. **First bottleneck (already present):** Cache table full-scan on lookup as row count grows. Fix: add index on `(provider, enrichment_type, query_hash, expires_at)`. This is the highest-leverage single change.
-
-2. **Second bottleneck:** Memory pressure on large CSVs. Fix: row chunking prevents full dataset materialization.
-
-3. **Third bottleneck:** SQLite write lock contention with multiple Streamlit users. Mitigation within scope: fewer, larger transactions (batch audit writes per chunk rather than per row). Full fix (PostgreSQL) is explicitly out of scope.
-
-## Anti-Patterns
-
-### Anti-Pattern 1: Catching `Exception` Broadly in Providers
-
-**What people do:** `except Exception as e: logger.error(e); return ProviderResponse(found=False)`
-
-**Why it's wrong:** Swallows programming errors (AttributeError, TypeError) alongside expected network errors. Makes debugging silent data loss nearly impossible. Circuit breaker may not trip because the exception never propagates.
-
-**Do this instead:** Catch `httpx.TimeoutException`, `httpx.HTTPStatusError`, `httpx.RequestError` explicitly. Let `ValueError` (from input validation) propagate or catch separately. Let unexpected exceptions propagate to the waterfall's top-level handler so they are visible.
-
-### Anti-Pattern 2: String-Formatted SQL
-
-**What people do:** `cursor.execute(f"SELECT * FROM cache WHERE key = '{key}'")`
-
-**Why it's wrong:** SQL injection if `key` contains user-controlled data. Also prevents SQLite query plan caching.
-
-**Do this instead:** `cursor.execute("SELECT * FROM cache WHERE key = ?", (key,))`
-
-### Anti-Pattern 3: Per-Instance HTTP Clients
-
-**What people do:** Each `ApolloProvider.__init__()` creates `self.client = httpx.AsyncClient()`.
-
-**Why it's wrong:** With a semaphore(5) and 4 providers, up to 20 simultaneous `AsyncClient` instances can exist. Each maintains its own connection pool. File descriptors are wasted; connections cannot be reused across providers for the same host.
-
-**Do this instead:** Pass a shared `httpx.AsyncClient` from a module-level factory. Provider constructors accept the client as a parameter.
-
-### Anti-Pattern 4: Non-Atomic Budget Checks
-
-**What people do:** `if budget_ok: call_api(); deduct_budget()` — check and deduction are separate operations.
-
-**Why it's wrong:** Under concurrent enrichment (semaphore(5)), two workers can both pass the budget check before either has deducted, resulting in overspend.
-
-**Do this instead:** Use a threading lock or asyncio lock around the check-and-deduct pair. Alternatively, deduct optimistically before the call and refund on failure.
-
-### Anti-Pattern 5: Unbounded Batch Processing
-
-**What people do:** `await asyncio.gather(*[enrich_single(row) for row in all_rows])`
-
-**Why it's wrong:** Even with a semaphore, materializing 5,000 coroutine objects simultaneously consumes memory. No opportunity to pause mid-batch. No checkpointing on failure.
-
-**Do this instead:** Chunk into groups of CHUNK_SIZE (e.g., 100). Process chunks sequentially; parallelize within chunks via semaphore. Checkpoint campaign state between chunks.
-
-## Integration Points
-
-### External Services
-
-| Service | Integration Pattern | Notes |
-|---------|---------------------|-------|
-| Apollo.io | REST via shared httpx client | Rate limit: varies by plan; circuit breaker guards |
-| Findymail | REST via shared httpx client | Has bulk endpoint — Icypeas uses it, Apollo does not |
-| Icypeas | REST via shared httpx client | Bulk operations available |
-| ContactOut | REST via shared httpx client | LinkedIn-based; slower responses (10-30s) — pool timeout must accommodate |
-
-### Internal Boundaries
-
-| Boundary | Communication | Notes |
-|----------|---------------|-------|
-| WaterfallOrchestrator ↔ Providers | Direct async method calls | After milestone: providers receive shared httpx client; no other interface change |
-| WaterfallOrchestrator ↔ CacheManager | Direct method calls | Cache lookup before provider dispatch; write after success |
-| WaterfallOrchestrator ↔ BudgetManager | Direct method calls | Must become atomic check+deduct; use asyncio.Lock |
-| Providers ↔ InputValidator | Direct function calls | New boundary: validator called at top of every provider method |
-| CacheManager ↔ Database | Direct SQL via Database class | After milestone: eviction runs as separate scheduled coroutine |
-| AuditLogger ↔ Database | Direct SQL writes | New boundary: every enrichment event writes to action_logs within same transaction as credit_usage |
-| WaterfallOrchestrator ↔ Campaign state | Database reads/writes | Pause/resume state: polled between chunks |
-
-## Build Order Implications
-
-The improvements have clear dependency ordering:
-
-**Phase 1 — Hardening (no dependencies on other milestone work)**
-- Parameterize all SQL queries in `data/database.py` (security; unblocks trust in data layer for audit trail)
-- Add `InputValidator` to `providers/base.py`
-- Apply typed exceptions + `.get()` fallbacks to all 4 providers
-- No other component changes required
-
-**Phase 2 — Performance (depends on Phase 1 having stable providers)**
-- Create `providers/http_pool.py` shared client
-- Inject shared client into all 4 providers (requires hardened providers from Phase 1)
-- Add adaptive concurrency configuration to `settings.py`
-- Update `WaterfallOrchestrator` concurrency to use adaptive limits
-
-**Phase 3 — Scaling (depends on Phase 2 for stable orchestrator base)**
-- Add SQLite indexes on cache table (`data/database.py`)
-- Add active eviction to `cost/cache.py`
-- Add row chunking + checkpointing to `WaterfallOrchestrator`
-- Add pause/resume state machine to `WaterfallOrchestrator` + `campaigns` table
-
-**Phase 4 — New Capabilities (depends on Phase 3 for stable batch infrastructure)**
-- Audit trail: `action_logs` table + `AuditLogger` (requires hardened DB writes from Phase 1)
-- Cross-campaign deduplication (requires stable campaign state from Phase 3)
-- Provider A/B testing (requires stable audit trail from this phase)
-- API key rotation (requires stable settings infrastructure)
-- Per-domain email verification rate limiting
-
-**Why this order:** Security defects (SQL injection, bare exceptions) represent live production risk and must be fixed before building on top of the affected components. Connection pooling depends on stable providers. Chunking/scaling depends on stable concurrency. New capabilities (audit, deduplication, A/B) depend on the entire hardened + scaled foundation.
+---
 
 ## Sources
 
-- `.planning/codebase/ARCHITECTURE.md` — direct codebase analysis (HIGH confidence)
-- `.planning/codebase/CONCERNS.md` — documented defects and their locations (HIGH confidence)
-- `.planning/PROJECT.md` — milestone scope and constraints (HIGH confidence)
+- [simple-salesforce documentation](https://simple-salesforce.readthedocs.io/en/latest/) -- Python Salesforce REST API client, HIGH confidence
+- [simple-salesforce PyPI](https://pypi.org/project/simple-salesforce/) -- current version, HIGH confidence
+- [Salesforce SOQL query docs](https://developer.salesforce.com/docs/atlas.en-us.api_rest.meta/api_rest/dome_query.htm) -- SOQL query patterns, HIGH confidence
+- [OpenAI Python API library](https://developers.openai.com/api/reference/python/) -- AsyncOpenAI client, HIGH confidence
+- [OpenAI API models](https://developers.openai.com/api/docs/models) -- gpt-4o-mini pricing and capabilities, HIGH confidence
+- Direct codebase analysis of: `providers/base.py`, `providers/apollo.py`, `enrichment/waterfall.py`, `data/models.py`, `data/schema.sql`, `data/database.py`, `config/settings.py` -- HIGH confidence
 
 ---
-*Architecture research for: Clay-Dupe B2B enrichment pipeline hardening, performance, and scaling milestone*
-*Researched: 2026-03-04*
+
+*Architecture research for: v2.0 Salesforce integration, AI email generation, company sourcing*
+*Researched: 2026-03-07*
