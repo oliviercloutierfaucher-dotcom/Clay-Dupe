@@ -79,7 +79,8 @@ class TestIcypeasPollingTimeout:
     @pytest.mark.asyncio
     async def test_icypeas_polling_timeout(self):
         """Mock the polling loop so it never resolves; verify it exits via timeout."""
-        from providers.icypeas import IcypeasProvider, MAX_POLL_TIMEOUT
+        import providers.icypeas as icypeas_mod
+        from providers.icypeas import IcypeasProvider
 
         provider = IcypeasProvider(api_key="test-key")
 
@@ -100,28 +101,22 @@ class TestIcypeasPollingTimeout:
         provider._request = mock_request
 
         # Use a very small timeout for testing
-        with patch.object(
-            type(provider).__module__.split('.')[0],
-            'MAX_POLL_TIMEOUT',
-            create=True,
-        ):
-            import providers.icypeas as icypeas_mod
-            original_timeout = icypeas_mod.MAX_POLL_TIMEOUT
-            icypeas_mod.MAX_POLL_TIMEOUT = 2  # 2 seconds for test
+        original_timeout = icypeas_mod.MAX_POLL_TIMEOUT
+        icypeas_mod.MAX_POLL_TIMEOUT = 2  # 2 seconds for test
 
-            start = time.monotonic()
-            try:
-                results = await provider.find_email_batch([
-                    {"first_name": "Test", "last_name": "User", "domain": "example.com"}
-                ])
-            finally:
-                icypeas_mod.MAX_POLL_TIMEOUT = original_timeout
+        start = time.monotonic()
+        try:
+            results = await provider.find_email_batch([
+                {"first_name": "Test", "last_name": "User", "domain": "example.com"}
+            ])
+        finally:
+            icypeas_mod.MAX_POLL_TIMEOUT = original_timeout
 
-            elapsed = time.monotonic() - start
-            # Should exit within a reasonable time (timeout + some margin)
-            assert elapsed < 10, f"Polling took {elapsed:.1f}s, expected < 10s"
-            # Should have been called at least once
-            assert call_count >= 2  # submit + at least one poll
+        elapsed = time.monotonic() - start
+        # Should exit within a reasonable time (timeout + some margin)
+        assert elapsed < 10, f"Polling took {elapsed:.1f}s, expected < 10s"
+        # Should have been called at least once
+        assert call_count >= 2  # submit + at least one poll
 
 
 # ---------------------------------------------------------------------------

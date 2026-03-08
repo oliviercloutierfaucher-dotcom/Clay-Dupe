@@ -15,6 +15,8 @@ from providers.validators import validate_domain, validate_linkedin_url, validat
 
 logger = logging.getLogger(__name__)
 
+MAX_POLL_ITERATIONS = 60  # Maximum polling iterations for batch jobs
+
 
 class ContactOutProvider(BaseProvider):
     """ContactOut API integration.
@@ -351,8 +353,16 @@ class ContactOutProvider(BaseProvider):
         poll_url = f"/v2/people/linkedin/batch/{job_id}"
         poll_interval = 1.0   # start fast, back off exponentially
         max_interval = 5.0
+        iterations = 0
 
         while True:
+            iterations += 1
+            if iterations > MAX_POLL_ITERATIONS:
+                logger.warning(
+                    "ContactOut batch polling exceeded %d iterations",
+                    MAX_POLL_ITERATIONS,
+                )
+                return []
             await asyncio.sleep(poll_interval)
             poll_interval = min(poll_interval * 1.5, max_interval)
 

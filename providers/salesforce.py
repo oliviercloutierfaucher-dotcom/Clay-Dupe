@@ -6,6 +6,7 @@ Used as a pre-enrichment gate to flag companies already in Salesforce.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Iterator, Optional
 
 from simple_salesforce import Salesforce
@@ -14,6 +15,24 @@ from simple_salesforce.exceptions import SalesforceAuthenticationFailed, Salesfo
 logger = logging.getLogger(__name__)
 
 BATCH_SIZE = 150  # SOQL IN clause limit
+
+
+def _escape_soql(value: str) -> str:
+    """Escape a string for safe use in SOQL LIKE clauses.
+
+    Order matters: backslashes first, then quotes, then LIKE wildcards.
+    Control characters (0x00-0x1f) are stripped entirely.
+    """
+    # Strip control characters (null bytes, tabs, etc.)
+    value = re.sub(r'[\x00-\x1f]', '', value)
+    # Escape backslashes first (before other escapes add more backslashes)
+    value = value.replace('\\', '\\\\')
+    # Escape single quotes
+    value = value.replace("'", "\\'")
+    # Escape LIKE wildcards
+    value = value.replace('%', '\\%')
+    value = value.replace('_', '\\_')
+    return value
 
 
 def _normalize_domain(url: str) -> str:
@@ -145,7 +164,7 @@ class SalesforceClient:
             unmatched_list = list(unmatched)
             for chunk in _chunked(unmatched_list, BATCH_SIZE):
                 like_clauses = " OR ".join(
-                    f"Website LIKE '%{d}%'" for d in chunk
+                    f"Website LIKE '%{_escape_soql(d)}%'" for d in chunk
                 )
                 soql = (
                     f"SELECT Id, Name, Website "

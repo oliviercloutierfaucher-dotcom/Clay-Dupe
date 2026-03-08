@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Optional
 
 import httpx
@@ -13,6 +14,8 @@ from config.settings import ProviderName
 from data.models import Company, Person
 
 logger = logging.getLogger(__name__)
+
+MAX_POLL_TIMEOUT = 300  # Maximum seconds to poll for bulk results
 
 
 class IcypeasProvider(BaseProvider):
@@ -204,7 +207,13 @@ class IcypeasProvider(BaseProvider):
 
         poll_interval = 1.0   # start fast, back off exponentially
         max_interval = 5.0
+        deadline = time.monotonic() + MAX_POLL_TIMEOUT
         while len(collected_items) < total_expected:
+            if time.monotonic() > deadline:
+                logger.warning(
+                    "Icypeas bulk polling timed out after %ds", MAX_POLL_TIMEOUT,
+                )
+                break
             await asyncio.sleep(poll_interval)
             poll_interval = min(poll_interval * 1.5, max_interval)
 

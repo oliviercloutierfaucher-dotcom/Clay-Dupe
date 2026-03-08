@@ -345,8 +345,8 @@ def enrich(
         budget_mgr = BudgetManager(db)
         pattern_engine = PatternEngine(db, verifier)
         cost_tracker = CostTracker(db)
-        circuit_breakers = create_circuit_breakers(list(providers.keys()))
-        rate_limiters = create_rate_limiters(list(providers.keys()))
+        circuit_breakers = create_circuit_breakers()
+        rate_limiters = create_rate_limiters()
 
         # Apply budget limits from settings
         for pname, pconfig in settings.providers.items():
@@ -874,8 +874,8 @@ def resume(
         budget_mgr = BudgetManager(db)
         pattern_engine = PatternEngine(db, verifier)
         cost_tracker_inner = CostTracker(db)
-        circuit_breakers = create_circuit_breakers(list(providers.keys()))
-        rate_limiters = create_rate_limiters(list(providers.keys()))
+        circuit_breakers = create_circuit_breakers()
+        rate_limiters = create_rate_limiters()
 
         for pname, pconfig in settings.providers.items():
             if pconfig.daily_credit_limit is not None:
