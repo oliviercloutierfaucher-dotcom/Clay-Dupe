@@ -39,6 +39,7 @@ class Database:
     def __init__(self, db_path: str = "clay_dupe.db"):
         self.db_path = db_path
         self._conn: Optional[aiosqlite.Connection] = None
+        self._write_lock = asyncio.Lock()
         self._init_db()
 
     def _init_db(self):
@@ -65,14 +66,19 @@ class Database:
 
     @asynccontextmanager
     async def _connect(self):
-        """Async context manager reusing a singleton DB connection. WAL mode, FK ON, busy_timeout=5000."""
-        conn = await self._get_connection()
-        try:
-            yield conn
-            await conn.commit()
-        except Exception:
-            await conn.rollback()
-            raise
+        """Async context manager reusing a singleton DB connection. WAL mode, FK ON, busy_timeout=5000.
+
+        Serializes all writes through ``_write_lock`` to prevent SQLITE_BUSY
+        errors when multiple coroutines write concurrently.
+        """
+        async with self._write_lock:
+            conn = await self._get_connection()
+            try:
+                yield conn
+                await conn.commit()
+            except Exception:
+                await conn.rollback()
+                raise
 
     async def close(self):
         """Close the singleton connection for clean shutdown."""
@@ -296,6 +302,9 @@ class Database:
                         phone = COALESCE(?, phone),
                         source_provider = COALESCE(?, source_provider),
                         apollo_id = COALESCE(?, apollo_id),
+                        source_type = COALESCE(?, source_type),
+                        icp_score = COALESCE(?, icp_score),
+                        status = COALESCE(?, status),
                         enriched_at = COALESCE(?, enriched_at),
                         updated_at = ?
                     WHERE domain = ?""",
@@ -307,6 +316,7 @@ class Database:
                         company.description, company.city, company.state, company.country,
                         company.full_address, company.linkedin_url, company.website_url,
                         company.phone, source, company.apollo_id,
+                        company.source_type, company.icp_score, company.status,
                         enriched, now, company.domain.strip().lower(),
                     ),
                 )
@@ -321,8 +331,9 @@ class Database:
                         employee_range, revenue_usd, ebitda_usd, founded_year,
                         description, city, state, country, full_address,
                         linkedin_url, website_url, phone, source_provider,
-                        apollo_id, enriched_at, created_at, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        apollo_id, source_type, icp_score, status,
+                        enriched_at, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         company.id, company.name, company.domain, company.industry,
                         industry_tags_json, company.employee_count, company.employee_range,
@@ -330,6 +341,7 @@ class Database:
                         company.description, company.city, company.state, company.country,
                         company.full_address, company.linkedin_url, company.website_url,
                         company.phone, source, company.apollo_id,
+                        company.source_type, company.icp_score, company.status,
                         enriched, now, now,
                     ),
                 )
@@ -355,7 +367,7 @@ class Database:
         """Search companies with dynamic filters.
 
         Supported filters: industry, country, employee_min, employee_max,
-        ebitda_min, ebitda_max.
+        ebitda_min, ebitda_max, status, source_type, min_icp_score.
         """
         clauses: list[str] = []
         params: list = []
@@ -384,6 +396,18 @@ class Database:
             clauses.append("ebitda_usd <= ?")
             params.append(filters["ebitda_max"])
 
+        if "status" in filters and filters["status"] is not None:
+            clauses.append("status = ?")
+            params.append(filters["status"])
+
+        if "source_type" in filters and filters["source_type"] is not None:
+            clauses.append("source_type = ?")
+            params.append(filters["source_type"])
+
+        if "min_icp_score" in filters and filters["min_icp_score"] is not None:
+            clauses.append("icp_score >= ?")
+            params.append(filters["min_icp_score"])
+
         where = " AND ".join(clauses) if clauses else "1=1"
         sql = "SELECT * FROM companies WHERE " + where + " ORDER BY name"
 
@@ -391,6 +415,53 @@ class Database:
             cursor = await conn.execute(sql, params)
             rows = await cursor.fetchall()
             return [self._row_to_company(r) for r in rows]
+
+    # ------------------------------------------------------------------
+    # ICP Profile Operations
+    # ------------------------------------------------------------------
+
+    async def save_icp_profile(
+        self, profile_id: str, name: str, config: dict, is_default: bool = False,
+    ) -> None:
+        """Insert or update an ICP profile."""
+        now = datetime.utcnow().isoformat()
+        config_json = json.dumps(config)
+        async with self._connect() as conn:
+            await conn.execute(
+                """INSERT INTO icp_profiles (id, name, config, is_default, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(name) DO UPDATE SET
+                       config = excluded.config,
+                       is_default = excluded.is_default,
+                       updated_at = excluded.updated_at""",
+                (profile_id, name, config_json, int(is_default), now, now),
+            )
+
+    async def get_icp_profiles(self) -> list[dict]:
+        """Return all ICP profiles as dicts with parsed config."""
+        async with self._connect() as conn:
+            cursor = await conn.execute(
+                "SELECT * FROM icp_profiles ORDER BY name"
+            )
+            rows = await cursor.fetchall()
+            results = []
+            for r in rows:
+                d = dict(r)
+                if isinstance(d.get("config"), str):
+                    try:
+                        d["config"] = json.loads(d["config"])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                d["is_default"] = bool(d.get("is_default", 0))
+                results.append(d)
+            return results
+
+    async def delete_icp_profile(self, profile_id: str) -> None:
+        """Delete an ICP profile by ID."""
+        async with self._connect() as conn:
+            await conn.execute(
+                "DELETE FROM icp_profiles WHERE id = ?", (profile_id,)
+            )
 
     # ------------------------------------------------------------------
     # Person Operations

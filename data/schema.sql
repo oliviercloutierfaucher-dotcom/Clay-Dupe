@@ -28,6 +28,9 @@ CREATE TABLE IF NOT EXISTS companies (
     phone             TEXT,
     source_provider   TEXT,
     apollo_id         TEXT,
+    source_type       TEXT DEFAULT 'apollo_search',
+    icp_score         INTEGER,
+    status            TEXT DEFAULT 'new',
     enriched_at       TIMESTAMP,
     created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -56,6 +59,27 @@ CREATE INDEX IF NOT EXISTS ix_companies_ebitda_usd
 
 CREATE INDEX IF NOT EXISTS ix_companies_icp_filter
     ON companies(country, employee_count, ebitda_usd);
+
+CREATE INDEX IF NOT EXISTS ix_companies_status
+    ON companies(status);
+
+CREATE INDEX IF NOT EXISTS ix_companies_icp_score
+    ON companies(icp_score);
+
+CREATE INDEX IF NOT EXISTS ix_companies_source_type
+    ON companies(source_type);
+
+-- ============================================================
+-- 1b. icp_profiles
+-- ============================================================
+CREATE TABLE IF NOT EXISTS icp_profiles (
+    id              TEXT PRIMARY KEY,
+    name            TEXT NOT NULL UNIQUE,
+    config          TEXT NOT NULL,              -- JSON object
+    is_default      BOOLEAN DEFAULT 0,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
 -- ============================================================
 -- 2. people

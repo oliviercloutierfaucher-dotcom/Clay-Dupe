@@ -62,6 +62,50 @@ class TestCompany:
         c = Company(name="Acme", country=None)
         assert c.country is None
 
+    def test_source_type_accepts_string(self):
+        c = Company(name="Acme", source_type="apollo_search")
+        assert c.source_type == "apollo_search"
+
+    def test_source_type_csv_import(self):
+        c = Company(name="Acme", source_type="csv_import")
+        assert c.source_type == "csv_import"
+
+    def test_source_type_manual(self):
+        c = Company(name="Acme", source_type="manual")
+        assert c.source_type == "manual"
+
+    def test_source_type_default_none(self):
+        c = Company(name="Acme")
+        assert c.source_type is None
+
+    def test_icp_score_accepts_integer(self):
+        c = Company(name="Acme", icp_score=85)
+        assert c.icp_score == 85
+
+    def test_icp_score_zero(self):
+        c = Company(name="Acme", icp_score=0)
+        assert c.icp_score == 0
+
+    def test_icp_score_hundred(self):
+        c = Company(name="Acme", icp_score=100)
+        assert c.icp_score == 100
+
+    def test_icp_score_default_none(self):
+        c = Company(name="Acme")
+        assert c.icp_score is None
+
+    def test_status_default_new(self):
+        c = Company(name="Acme")
+        assert c.status == "new"
+
+    def test_status_contacted(self):
+        c = Company(name="Acme", status="contacted")
+        assert c.status == "contacted"
+
+    def test_status_skipped(self):
+        c = Company(name="Acme", status="skipped")
+        assert c.status == "skipped"
+
 
 # ---------------------------------------------------------------------------
 # Person model

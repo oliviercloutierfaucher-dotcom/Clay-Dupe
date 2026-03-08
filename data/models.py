@@ -91,6 +91,9 @@ class Company(BaseModel):
     phone: Optional[str] = None
     source_provider: Optional[ProviderName] = None
     apollo_id: Optional[str] = None
+    source_type: Optional[str] = None  # "apollo_search", "csv_import", "manual"
+    icp_score: Optional[int] = None    # 0-100
+    status: str = "new"                # "new", "contacted", "skipped"
     enriched_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)

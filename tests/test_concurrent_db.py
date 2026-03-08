@@ -219,3 +219,48 @@ class TestWALConcurrent:
             assert count == 30
 
             await db.close()
+
+
+# ---------------------------------------------------------------------------
+# Test: write lock exists and serializes writes
+# ---------------------------------------------------------------------------
+
+class TestWriteLock:
+    def test_write_lock_attribute_exists(self):
+        """Database instance should have a _write_lock attribute."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "test.db")
+            db = _make_db(db_path)
+            assert hasattr(db, "_write_lock")
+            assert isinstance(db._write_lock, asyncio.Lock)
+
+    @pytest.mark.asyncio
+    async def test_concurrent_company_upserts_no_errors(self):
+        """20 concurrent upsert_company() calls produce no SQLITE_BUSY errors."""
+        from data.models import Company
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "test.db")
+            db = _make_db(db_path)
+
+            async def upsert_one(i: int):
+                company = Company(
+                    id=str(uuid.uuid4()),
+                    name=f"Company{i}",
+                    domain=f"company{i}.com",
+                    source_type="apollo_search",
+                    icp_score=50,
+                    status="new",
+                )
+                await db.upsert_company(company)
+
+            # Run 20 concurrent upserts -- should not raise SQLITE_BUSY
+            await asyncio.gather(*[upsert_one(i) for i in range(20)])
+
+            async with db._connect() as conn:
+                cursor = await conn.execute("SELECT COUNT(*) FROM companies")
+                count = (await cursor.fetchone())[0]
+
+            assert count == 20
+
+            await db.close()
