@@ -23,6 +23,11 @@ RUN mkdir -p /data
 # Default DB path inside the persistent volume
 ENV DB_PATH=/data/clay_dupe.db
 
+# Run as non-root user for container security
+RUN groupadd -r appuser && useradd -r -g appuser -d /app appuser
+RUN chown -R appuser:appuser /app /data
+USER appuser
+
 EXPOSE 8501
 
 # Streamlit config: disable CORS/XSRF for local network use
