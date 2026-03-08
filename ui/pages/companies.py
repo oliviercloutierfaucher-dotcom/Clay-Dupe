@@ -545,23 +545,4 @@ else:
         else:
             st.caption("All displayed companies already have contacts or lack domains.")
 
-    # Also provide a download-friendly dataframe view
-    with st.expander("Dataframe view"):
-        df_data = []
-        for c in companies:
-            contact = contacts_map.get(c.id)
-            df_data.append({
-                "name": c.name,
-                "domain": c.domain,
-                "industry": c.industry,
-                "employees": c.employee_count,
-                "country": c.country,
-                "icp_score": c.icp_score,
-                "source": c.source_type,
-                "status": c.status,
-                "contact": contact.full_name if contact else None,
-                "contact_title": contact.title if contact else None,
-            })
-        if df_data:
-            df = pd.DataFrame(df_data)
-            st.dataframe(df, use_container_width=True)
+    # Main table above is now a sortable st.dataframe -- no need for separate view
