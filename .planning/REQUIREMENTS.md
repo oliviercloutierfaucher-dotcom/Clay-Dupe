@@ -34,7 +34,7 @@ Requirements for v2.0 Full Prospecting Platform. Each maps to roadmap phases.
 ### Infrastructure
 
 - [x] **INFRA-01**: System validates real API keys on startup and reports status
-- [ ] **INFRA-02**: Application deploys to cloud via Docker (Railway/Fly.io)
+- [x] **INFRA-02**: Application deploys to cloud via Docker (Railway/Fly.io)
 - [x] **INFRA-03**: SQLite write queue prevents concurrent write contention
 
 ## Future Requirements
@@ -104,7 +104,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | EMAIL-03 | Phase 12 | Complete |
 | EMAIL-04 | Phase 12 | Complete |
 | EMAIL-05 | Phase 12 | Complete |
-| INFRA-02 | Phase 13 | Pending |
+| INFRA-02 | Phase 13 | Complete |
 
 **Coverage:**
 - v2.0 requirements: 18 total

@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Full Prospecting Platform
 status: active
-stopped_at: Phase 13 context gathered
-last_updated: "2026-03-08T13:22:11.086Z"
+stopped_at: Completed 13-01-PLAN.md
+last_updated: "2026-03-08T13:41:41.448Z"
 last_activity: 2026-03-08 — Phase 12.1 verified (8/8 criteria)
 progress:
   total_phases: 5
   completed_phases: 4
-  total_plans: 10
-  completed_plans: 10
+  total_plans: 12
+  completed_plans: 11
 ---
 
 ---
@@ -66,16 +66,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Source, enrich, and qualify target companies with maximum accuracy in a single platform — preventing duplicate outreach to Salesforce contacts and generating personalized emails ready for Outreach.io sequences.
-**Current focus:** Phase 12.1 verified, Phase 13 next
+**Current focus:** Phase 13 Plan 01 complete, Plan 02 next
 
 ## Current Position
 
-Phase: 12.1 of 13 (Production Hardening) -- VERIFIED ✓
-Plan: 02 complete (2/2), 8/8 success criteria passed
-Status: Phase 12.1 verified, ready for Phase 13
-Last activity: 2026-03-08 — Phase 12.1 verified (8/8 criteria)
+Phase: 13 of 13 (Cloud Deployment Pipeline Polish)
+Plan: 01 complete (1/2)
+Status: 13-01 complete, ready for 13-02
+Last activity: 2026-03-08 — Completed 13-01 (Docker production config, E2E test, CI extension)
 
-Progress: [██████████] 100%
+Progress: [█████████░] 92%
 
 ## Performance Metrics
 
@@ -98,6 +98,7 @@ Progress: [██████████] 100%
 | Phase 12 P02 | 6min | 2 tasks | 2 files |
 | Phase 12.1 P01 | 5min | 2 tasks | 8 files |
 | Phase 12.1 P02 | 3min | 2 tasks | 4 files |
+| Phase 13 P01 | 5min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -134,6 +135,9 @@ Recent decisions affecting current work:
 - [Phase 12.1]: ContactOut iteration guard returns empty list on exhaustion (graceful degradation)
 - [Phase 12.1]: Auth fallback chain: st.secrets -> APP_PASSWORD env var -> warn and allow access
 - [Phase 12.1]: Settings persistence via dotenv.set_key() with load_dotenv(override=True) reload
+- [Phase 13]: entrypoint.sh uses exec for proper SIGTERM propagation in containers
+- [Phase 13]: server.port/address via CLI flags (not config.toml) for Railway dynamic PORT
+- [Phase 13]: CI docker-build job runs only on main branch, gated by test job
 
 ### Pending Todos
 
@@ -150,6 +154,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-08T13:22:11.081Z
-Stopped at: Phase 13 context gathered
-Resume file: .planning/phases/13-cloud-deployment-pipeline-polish/13-CONTEXT.md
+Last session: 2026-03-08T13:41:41.443Z
+Stopped at: Completed 13-01-PLAN.md
+Resume file: None
