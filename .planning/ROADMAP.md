@@ -77,8 +77,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 12-01-PLAN.md -- Data layer + email generation engine (models, schema, CRUD, Anthropic SDK, variable substitution, batch generation)
-- [ ] 12-02-PLAN.md -- Email UI page (campaign select, template management, generate, preview/edit, approve/reject, CSV export)
+- [x] 12-01-PLAN.md -- Data layer + email generation engine (models, schema, CRUD, Anthropic SDK, variable substitution, batch generation)
+- [x] 12-02-PLAN.md -- Email UI page (campaign select, template management, generate, preview/edit, approve/reject, CSV export)
 
 ### Phase 12.1: Production Hardening (INSERTED)
 
@@ -97,8 +97,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 12.1-01-PLAN.md -- Security fixes + bug fixes: SOQL injection, CLI crash, polling guards, Docker hardening, .env.example
-- [ ] 12.1-02-PLAN.md -- Auth gate + settings persistence: password-protected UI, .env persistence via set_key
+- [x] 12.1-01-PLAN.md -- Security fixes + bug fixes: SOQL injection, CLI crash, polling guards, Docker hardening, .env.example
+- [x] 12.1-02-PLAN.md -- Auth gate + settings persistence: password-protected UI, .env persistence via set_key
 
 ### Phase 13: Cloud Deployment + Pipeline Polish
 **Goal**: Application runs in the cloud via Docker and the full source-to-export pipeline works end-to-end
@@ -108,11 +108,11 @@ Plans:
   1. Application builds and runs in a Docker container with all dependencies
   2. Application deploys to a cloud provider (Railway or Fly.io) and is accessible via URL
   3. Full pipeline works end-to-end: source companies, check Salesforce, enrich contacts, generate emails, export CSV
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 13-01: TBD
-- [ ] 13-02: TBD
+- [ ] 13-01-PLAN.md -- Docker production config, E2E pipeline test, CI extension, smoke test checklist
+- [ ] 13-02-PLAN.md -- Railway deployment and smoke test verification (checkpoint)
 
 ## Progress
 
@@ -125,4 +125,4 @@ Phases execute in numeric order: 10 -> 10.x -> 11 -> 11.x -> 12 -> 12.x -> 13
 | 11. Salesforce Integration | 2/2 | Complete | 2026-03-08 | - |
 | 12. AI Email Generation + Export | 2/2 | Complete   | 2026-03-08 | - |
 | 12.1 Production Hardening (INSERTED) | 2/2 | Complete   | 2026-03-08 | - |
-| 13. Cloud Deployment + Pipeline Polish | v2.0 | 0/? | Not started | - |
+| 13. Cloud Deployment + Pipeline Polish | v2.0 | 0/2 | Not started | - |
