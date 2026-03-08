@@ -25,9 +25,9 @@ Requirements for v2.0 Full Prospecting Platform. Each maps to roadmap phases.
 
 ### AI Email Generation
 
-- [ ] **EMAIL-01**: User can generate personalized cold emails from enriched contact/company data
-- [ ] **EMAIL-02**: User can create and edit email prompt templates with variable substitution
-- [ ] **EMAIL-03**: User can batch-generate emails for an entire campaign
+- [x] **EMAIL-01**: User can generate personalized cold emails from enriched contact/company data
+- [x] **EMAIL-02**: User can create and edit email prompt templates with variable substitution
+- [x] **EMAIL-03**: User can batch-generate emails for an entire campaign
 - [ ] **EMAIL-04**: User can preview and edit generated emails before export
 - [ ] **EMAIL-05**: User can export emails as Outreach.io-ready CSV (email, name, subject, body)
 
@@ -99,9 +99,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SF-02 | Phase 11 | Complete |
 | SF-03 | Phase 11 | Complete |
 | SF-04 | Phase 11 | Complete |
-| EMAIL-01 | Phase 12 | Pending |
-| EMAIL-02 | Phase 12 | Pending |
-| EMAIL-03 | Phase 12 | Pending |
+| EMAIL-01 | Phase 12 | Complete |
+| EMAIL-02 | Phase 12 | Complete |
+| EMAIL-03 | Phase 12 | Complete |
 | EMAIL-04 | Phase 12 | Pending |
 | EMAIL-05 | Phase 12 | Pending |
 | INFRA-02 | Phase 13 | Pending |

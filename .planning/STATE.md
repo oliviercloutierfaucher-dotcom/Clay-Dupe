@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Full Prospecting Platform
 status: active
-stopped_at: Phase 12 context gathered
-last_updated: "2026-03-08T06:26:57.170Z"
-last_activity: 2026-03-08 — Completed 11-02 (SF UI wiring)
+stopped_at: Completed 12-01-PLAN.md
+last_updated: "2026-03-08T12:15:31Z"
+last_activity: 2026-03-08 — Completed 12-01 (email generation backend)
 progress:
   total_phases: 4
   completed_phases: 2
-  total_plans: 6
-  completed_plans: 6
+  total_plans: 8
+  completed_plans: 7
 ---
 
 ---
@@ -39,19 +39,19 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 
 ## Current Position
 
-Phase: 11 of 13 (Salesforce Integration) -- COMPLETE
-Plan: 02 complete (2/2)
-Status: Phase 11 complete, ready for Phase 12
-Last activity: 2026-03-08 — Completed 11-02 (SF UI wiring)
+Phase: 12 of 13 (AI Email Generation + Export)
+Plan: 01 complete (1/2)
+Status: Phase 12 Plan 01 complete, ready for Plan 02
+Last activity: 2026-03-08 — Completed 12-01 (email generation backend)
 
-Progress: [██████████] 100%
+Progress: [███████░░░] 70%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 6 (v2.0)
-- Average duration: 4.7min
-- Total execution time: 33min
+- Total plans completed: 7 (v2.0)
+- Average duration: 5.1min
+- Total execution time: 41min
 
 **By Phase:**
 
@@ -63,6 +63,7 @@ Progress: [██████████] 100%
 | Phase 10 P04 | 5min | 3 tasks | 4 files |
 | Phase 11 P01 | 5min | 2 tasks | 6 files |
 | Phase 11 P02 | 6min | 3 tasks | 4 files |
+| Phase 12 P01 | 8min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -87,6 +88,10 @@ Recent decisions affecting current work:
 - [Phase 11]: Pre-enrichment SF gate uses asyncio.to_thread() for sync SF client in async waterfall
 - [Phase 11]: SF unavailability logs warning, never blocks enrichment pipeline
 - [Phase 11]: Force-enrich override uses session_state domain set to bypass SF gate
+- [Phase 12]: Anthropic API key stored as standalone Settings attribute, not in ProviderName enum
+- [Phase 12]: Sequential API calls with 1.2s delay over Batch API (cost savings negligible at $2-4/3K emails)
+- [Phase 12]: Prompt caching via cache_control ephemeral on system prompt for batch cost reduction
+- [Phase 12]: All 3 starter templates flagged is_default=True for seed idempotency
 
 ### Pending Todos
 
@@ -99,6 +104,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-08T06:26:57.167Z
-Stopped at: Phase 12 context gathered
-Resume file: .planning/phases/12-ai-email-generation-export/12-CONTEXT.md
+Last session: 2026-03-08T12:15:31Z
+Stopped at: Completed 12-01-PLAN.md
+Resume file: .planning/phases/12-ai-email-generation-export/12-01-SUMMARY.md
