@@ -1,9 +1,15 @@
 """Load config from .env + provide ICP presets."""
+from __future__ import annotations
+
+import json
 import os
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from enum import Enum
+
+if TYPE_CHECKING:
+    from data.database import Database
 
 load_dotenv()
 
@@ -120,3 +126,44 @@ ICP_PRESETS = {
         keywords=["precision machining", "CNC", "injection molding", "OEM", "contract manufacturer", "fabrication"],
     ),
 }
+
+
+def load_all_icp_profiles(db: Database) -> dict[str, ICPPreset]:
+    """Load built-in ICP presets merged with custom profiles from the DB.
+
+    Custom profiles override built-in ones if they share the same name key.
+    Returns a combined dict[profile_key, ICPPreset].
+    """
+    from data.sync import run_sync
+
+    combined = dict(ICP_PRESETS)
+
+    try:
+        custom_rows = run_sync(db.get_icp_profiles())
+    except Exception:
+        return combined
+
+    for row in custom_rows:
+        config = row.get("config", {})
+        if isinstance(config, str):
+            config = json.loads(config)
+        name_key = row.get("name", "").replace(" ", "_").lower()
+        if not name_key:
+            continue
+        try:
+            preset = ICPPreset(
+                name=name_key,
+                display_name=row.get("name", name_key),
+                industries=config.get("industries", []),
+                keywords=config.get("keywords", []),
+                employee_min=config.get("employee_min", 10),
+                employee_max=config.get("employee_max", 100),
+                ebitda_min=config.get("ebitda_min"),
+                ebitda_max=config.get("ebitda_max"),
+                countries=config.get("countries", ["US", "UK", "CA"]),
+            )
+            combined[name_key] = preset
+        except Exception:
+            continue
+
+    return combined

@@ -89,6 +89,7 @@ elif invalid_providers:
 
 data_pages = [
     st.Page("pages/dashboard.py", title="Overview", icon=":material/dashboard:"),
+    st.Page("pages/companies.py", title="Companies", icon=":material/business:"),
     st.Page("pages/search.py", title="Find Leads", icon=":material/search:"),
     st.Page("pages/results.py", title="Data Table", icon=":material/table_chart:", default=True),
 ]

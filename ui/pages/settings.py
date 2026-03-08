@@ -303,6 +303,132 @@ with general_cols[1]:
     settings.max_concurrent_requests = max_concurrent
 
 st.divider()
+
+# ---- ICP Profile Management --------------------------------------------------
+
+st.subheader("ICP Profiles")
+st.caption(
+    "Manage Ideal Customer Profile (ICP) presets used for scoring companies. "
+    "Built-in profiles cannot be deleted."
+)
+
+from config.settings import ICP_PRESETS, ICPPreset, load_all_icp_profiles
+import uuid as _uuid
+
+# Load all profiles
+all_profiles = load_all_icp_profiles(db)
+
+# Load custom profile IDs from DB for edit/delete
+_custom_db_profiles = run_sync(db.get_icp_profiles())
+_custom_names = {row["name"] for row in _custom_db_profiles}
+_custom_ids = {row["name"]: row["id"] for row in _custom_db_profiles}
+
+# Display existing profiles
+for key, profile in all_profiles.items():
+    is_builtin = key in ICP_PRESETS and profile.display_name not in _custom_names
+    badge = ":blue[Built-in]" if is_builtin else ":green[Custom]"
+
+    with st.expander(f"{profile.display_name} {badge}"):
+        prof_cols = st.columns(2)
+        with prof_cols[0]:
+            st.markdown(f"**Employees:** {profile.employee_min:,} - {profile.employee_max:,}")
+            st.markdown(f"**Countries:** {', '.join(profile.countries)}")
+        with prof_cols[1]:
+            st.markdown(f"**Industries:** {', '.join(profile.industries[:5])}")
+            if profile.keywords:
+                st.markdown(f"**Keywords:** {', '.join(profile.keywords[:5])}")
+
+        if not is_builtin:
+            edit_cols = st.columns(2)
+            with edit_cols[0]:
+                if st.button("Edit", key=f"edit_icp_{key}", use_container_width=True):
+                    st.session_state["icp_edit_profile"] = key
+            with edit_cols[1]:
+                if st.button(
+                    "Delete", key=f"del_icp_{key}", type="secondary",
+                    use_container_width=True,
+                ):
+                    profile_id = _custom_ids.get(profile.display_name)
+                    if profile_id:
+                        run_sync(db.delete_icp_profile(profile_id))
+                        st.success(f"Deleted profile: {profile.display_name}")
+                        st.rerun()
+
+st.divider()
+
+# Create / Edit form
+_editing = st.session_state.get("icp_edit_profile")
+_edit_preset = all_profiles.get(_editing) if _editing else None
+_form_title = f"Edit: {_edit_preset.display_name}" if _edit_preset else "Create Custom Profile"
+
+with st.expander(_form_title, expanded=bool(_edit_preset)):
+    icp_name = st.text_input(
+        "Profile Name",
+        value=_edit_preset.display_name if _edit_preset else "",
+        key="icp_form_name",
+    )
+    emp_cols = st.columns(2)
+    with emp_cols[0]:
+        icp_emp_min = st.number_input(
+            "Min Employees", min_value=0, max_value=1_000_000,
+            value=_edit_preset.employee_min if _edit_preset else 10,
+            step=10, key="icp_form_emp_min",
+        )
+    with emp_cols[1]:
+        icp_emp_max = st.number_input(
+            "Max Employees", min_value=0, max_value=1_000_000,
+            value=_edit_preset.employee_max if _edit_preset else 100,
+            step=10, key="icp_form_emp_max",
+        )
+
+    icp_industries = st.text_area(
+        "Industries (one per line)",
+        value="\n".join(_edit_preset.industries) if _edit_preset else "",
+        key="icp_form_industries",
+    )
+    icp_keywords = st.text_area(
+        "Keywords (one per line)",
+        value="\n".join(_edit_preset.keywords) if _edit_preset else "",
+        key="icp_form_keywords",
+    )
+    _country_options = ["US", "CA", "UK", "IE", "DE", "FR", "AU"]
+    icp_countries = st.multiselect(
+        "Countries",
+        options=_country_options,
+        default=_edit_preset.countries if _edit_preset else ["US", "CA", "UK"],
+        key="icp_form_countries",
+    )
+
+    save_cols = st.columns(2)
+    with save_cols[0]:
+        if st.button("Save Profile", type="primary", use_container_width=True, key="icp_save"):
+            if not icp_name.strip():
+                st.error("Profile name is required.")
+            else:
+                config_dict = {
+                    "industries": [i.strip() for i in icp_industries.split("\n") if i.strip()],
+                    "keywords": [k.strip() for k in icp_keywords.split("\n") if k.strip()],
+                    "employee_min": icp_emp_min,
+                    "employee_max": icp_emp_max,
+                    "countries": icp_countries,
+                }
+                # Reuse existing ID if editing, else new UUID
+                profile_id = _custom_ids.get(icp_name.strip(), str(_uuid.uuid4()))
+                run_sync(db.save_icp_profile(
+                    profile_id=profile_id,
+                    name=icp_name.strip(),
+                    config=config_dict,
+                    is_default=False,
+                ))
+                st.success(f"Saved profile: {icp_name.strip()}")
+                st.session_state.pop("icp_edit_profile", None)
+                st.rerun()
+    with save_cols[1]:
+        if _edit_preset and st.button("Cancel", use_container_width=True, key="icp_cancel"):
+            st.session_state.pop("icp_edit_profile", None)
+            st.rerun()
+
+st.divider()
 st.caption(
     "Settings are stored in memory for this session. "
     "To persist changes, update your `.env` file and restart the application."
