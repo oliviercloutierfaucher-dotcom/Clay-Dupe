@@ -41,12 +41,13 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. User can import a CSV of companies and manually add individual companies, with source tracked per record
   4. User can discover contacts at any sourced company via Apollo people search
   5. System auto-scores each sourced company against ICP criteria and displays the score
-**Plans**: TBD
+**Plans**: 4 plans
 
 Plans:
-- [ ] 10-01: TBD
-- [ ] 10-02: TBD
-- [ ] 10-03: TBD
+- [ ] 10-01-PLAN.md -- Infrastructure hardening: write lock, API key validation, schema/model updates
+- [ ] 10-02-PLAN.md -- Core engines: ICP scoring and contact discovery modules
+- [ ] 10-03-PLAN.md -- Company sourcing: Apollo save, CSV import, manual add, company list page
+- [ ] 10-04-PLAN.md -- Integration: ICP scoring UI, contact discovery UI, pipeline wiring
 
 ### Phase 11: Salesforce Integration
 **Goal**: Users can check enrichment targets against Salesforce to prevent duplicate outreach and save enrichment credits
@@ -101,7 +102,7 @@ Phases execute in numeric order: 10 -> 10.x -> 11 -> 11.x -> 12 -> 12.x -> 13
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 10. Infrastructure + Company Sourcing | v2.0 | 0/? | Not started | - |
+| 10. Infrastructure + Company Sourcing | v2.0 | 0/4 | Planning complete | - |
 | 11. Salesforce Integration | v2.0 | 0/? | Not started | - |
 | 12. AI Email Generation + Export | v2.0 | 0/? | Not started | - |
 | 13. Cloud Deployment + Pipeline Polish | v2.0 | 0/? | Not started | - |
