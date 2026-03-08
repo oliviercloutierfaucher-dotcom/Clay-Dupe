@@ -2,9 +2,13 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from unittest.mock import MagicMock, patch, PropertyMock
 
 import pytest
+
+from data.database import Database
+from data.models import Company
 
 # ---------------------------------------------------------------------------
 # Config tests
@@ -188,3 +192,101 @@ class TestSalesforceClientCheckDomains:
 
         assert "gamma.com" in result
         assert result["gamma.com"]["sf_account_id"] == "001GHI"
+
+
+# ---------------------------------------------------------------------------
+# Model tests
+# ---------------------------------------------------------------------------
+
+class TestCompanyModelSFFields:
+    def test_accepts_sf_fields(self):
+        """Company model accepts sf_account_id, sf_status, sf_instance_url."""
+        c = Company(
+            name="Test Co",
+            sf_account_id="001ABC",
+            sf_status="in_sf",
+            sf_instance_url="na1.salesforce.com",
+        )
+        assert c.sf_account_id == "001ABC"
+        assert c.sf_status == "in_sf"
+        assert c.sf_instance_url == "na1.salesforce.com"
+
+    def test_sf_status_defaults_to_none(self):
+        """sf_status defaults to None."""
+        c = Company(name="Test Co")
+        assert c.sf_account_id is None
+        assert c.sf_status is None
+        assert c.sf_instance_url is None
+
+
+# ---------------------------------------------------------------------------
+# Database tests
+# ---------------------------------------------------------------------------
+
+def _make_test_db() -> tuple[Database, str]:
+    """Create a fresh in-memory-like temp DB with schema applied."""
+    tmpdir = tempfile.mkdtemp()
+    db_path = os.path.join(tmpdir, "test_sf.db")
+    db = Database(db_path)
+    return db, db_path
+
+
+class TestDatabaseSFStatus:
+    @pytest.mark.asyncio
+    async def test_update_company_sf_status(self):
+        """update_company_sf_status() persists sf_account_id and sf_status."""
+        db, _ = _make_test_db()
+        try:
+            company = Company(name="Acme", domain="acme.com")
+            await db.upsert_company(company)
+
+            await db.update_company_sf_status("acme.com", "001ABC", "na1.salesforce.com")
+
+            result = await db.get_company_by_domain("acme.com")
+            assert result is not None
+            assert result.sf_account_id == "001ABC"
+            assert result.sf_status == "in_sf"
+            assert result.sf_instance_url == "na1.salesforce.com"
+        finally:
+            await db.close()
+
+    @pytest.mark.asyncio
+    async def test_get_companies_by_sf_status(self):
+        """get_companies_by_sf_status() filters by sf_status."""
+        db, _ = _make_test_db()
+        try:
+            c1 = Company(name="InSF", domain="insf.com")
+            c2 = Company(name="NotSF", domain="notsf.com")
+            await db.upsert_company(c1)
+            await db.upsert_company(c2)
+            await db.update_company_sf_status("insf.com", "001X", "na1.salesforce.com")
+
+            in_sf = await db.get_companies_by_sf_status("in_sf")
+            assert len(in_sf) == 1
+            assert in_sf[0].domain == "insf.com"
+
+            all_companies = await db.get_companies_by_sf_status(None)
+            assert len(all_companies) == 2
+        finally:
+            await db.close()
+
+    @pytest.mark.asyncio
+    async def test_upsert_preserves_sf_account_id(self):
+        """upsert_company preserves sf_account_id if already set."""
+        db, _ = _make_test_db()
+        try:
+            c = Company(name="Acme", domain="acme.com")
+            await db.upsert_company(c)
+            await db.update_company_sf_status("acme.com", "001ABC", "na1.salesforce.com")
+
+            # Upsert again without SF fields — should preserve existing
+            c2 = Company(name="Acme Updated", domain="acme.com")
+            await db.upsert_company(c2)
+
+            result = await db.get_company_by_domain("acme.com")
+            assert result is not None
+            assert result.sf_account_id == "001ABC"
+            assert result.sf_status == "in_sf"
+            assert result.name == "Acme Updated"
+        finally:
+            await db.close()
