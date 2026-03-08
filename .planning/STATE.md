@@ -3,41 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Full Prospecting Platform
 status: active
-stopped_at: Phase 11 context gathered
-last_updated: "2026-03-08T05:14:29.101Z"
-last_activity: 2026-03-08 — Completed 10-01 (infrastructure hardening)
+stopped_at: Completed 11-01-PLAN.md
+last_updated: "2026-03-08T05:39:46Z"
+last_activity: 2026-03-08 — Completed 11-01 (SF foundation)
 progress:
   total_phases: 4
   completed_phases: 1
-  total_plans: 4
-  completed_plans: 4
----
-
----
-gsd_state_version: 1.0
-milestone: v2.0
-milestone_name: Full Prospecting Platform
-status: active
-stopped_at: Completed 10-02-PLAN.md
-last_updated: "2026-03-08T01:34:55.430Z"
-last_activity: 2026-03-07 — Roadmap created for v2.0
-progress:
-  total_phases: 4
-  completed_phases: 0
-  total_plans: 4
-  completed_plans: 2
----
-
----
-gsd_state_version: 1.0
-milestone: v2.0
-milestone_name: Full Prospecting Platform
-status: active
-stopped_at: "Roadmap created"
-last_updated: "2026-03-07T23:45:00.000Z"
-last_activity: 2026-03-07 — Roadmap created for v2.0 (Phases 10-13)
-progress:
-  percent: 0
+  total_plans: 6
+  completed_plans: 5
 ---
 
 # Project State
@@ -47,23 +20,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Source, enrich, and qualify target companies with maximum accuracy in a single platform — preventing duplicate outreach to Salesforce contacts and generating personalized emails ready for Outreach.io sequences.
-**Current focus:** Phase 10 - Infrastructure + Company Sourcing
+**Current focus:** Phase 11 - Salesforce Integration
 
 ## Current Position
 
-Phase: 10 of 13 (Infrastructure + Company Sourcing)
-Plan: 01 complete, 02 complete
-Status: Executing phase 10
-Last activity: 2026-03-08 — Completed 10-01 (infrastructure hardening)
+Phase: 11 of 13 (Salesforce Integration)
+Plan: 01 complete, 02 pending
+Status: Executing phase 11
+Last activity: 2026-03-08 — Completed 11-01 (SF foundation)
 
-Progress: [█████░░░░░] 50%
+Progress: [████████░░] 83%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 2 (v2.0)
-- Average duration: 4.5min
-- Total execution time: 9min
+- Total plans completed: 5 (v2.0)
+- Average duration: 4.4min
+- Total execution time: 27min
 
 **By Phase:**
 
@@ -73,6 +46,7 @@ Progress: [█████░░░░░] 50%
 | Phase 10 P02 | 3min | 2 tasks | 4 files |
 | Phase 10 P03 | 8min | 2 tasks | 4 files |
 | Phase 10 P04 | 5min | 3 tasks | 4 files |
+| Phase 11 P01 | 5min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -91,6 +65,9 @@ Recent decisions affecting current work:
 - [Phase 10]: Separated website_url from company_domain in ColumnMapper to avoid ambiguity
 - [Phase 10]: map_to_companies deduplicates by normalized domain with first-occurrence-wins COALESCE merge
 - [Phase 10]: ICP profiles loaded via load_all_icp_profiles() merging built-in presets with DB custom profiles
+- [Phase 11]: SF is a dedup gate, NOT in ProviderName enum
+- [Phase 11]: Schema migrations use ALTER TABLE with duplicate-column safety in _init_db
+- [Phase 11]: health_check() creates fresh SF connection for reliable credential testing
 
 ### Pending Todos
 
@@ -103,6 +80,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-08T05:14:29.097Z
-Stopped at: Phase 11 context gathered
-Resume file: .planning/phases/11-salesforce-integration/11-CONTEXT.md
+Last session: 2026-03-08T05:39:46Z
+Stopped at: Completed 11-01-PLAN.md
+Resume file: .planning/phases/11-salesforce-integration/11-01-SUMMARY.md
