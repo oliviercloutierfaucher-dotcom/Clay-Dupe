@@ -20,7 +20,7 @@ Requirements for v2.0 Full Prospecting Platform. Each maps to roadmap phases.
 - [ ] **SRC-02**: User can import company lists from CSV/Excel files
 - [ ] **SRC-03**: User can manually add individual companies (name, domain, industry)
 - [x] **SRC-04**: User can discover contacts at sourced companies via Apollo people search
-- [ ] **SRC-05**: System tracks the source of each company (apollo_search, csv_import, manual)
+- [x] **SRC-05**: System tracks the source of each company (apollo_search, csv_import, manual)
 - [x] **SRC-06**: System auto-scores companies against ICP criteria (employee count, revenue, industry match)
 
 ### AI Email Generation
@@ -33,9 +33,9 @@ Requirements for v2.0 Full Prospecting Platform. Each maps to roadmap phases.
 
 ### Infrastructure
 
-- [ ] **INFRA-01**: System validates real API keys on startup and reports status
+- [x] **INFRA-01**: System validates real API keys on startup and reports status
 - [ ] **INFRA-02**: Application deploys to cloud via Docker (Railway/Fly.io)
-- [ ] **INFRA-03**: SQLite write queue prevents concurrent write contention
+- [x] **INFRA-03**: SQLite write queue prevents concurrent write contention
 
 ## Future Requirements
 
@@ -87,13 +87,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| INFRA-01 | Phase 10 | Pending |
-| INFRA-03 | Phase 10 | Pending |
+| INFRA-01 | Phase 10 | Complete |
+| INFRA-03 | Phase 10 | Complete |
 | SRC-01 | Phase 10 | Pending |
 | SRC-02 | Phase 10 | Pending |
 | SRC-03 | Phase 10 | Pending |
 | SRC-04 | Phase 10 | Complete |
-| SRC-05 | Phase 10 | Pending |
+| SRC-05 | Phase 10 | Complete |
 | SRC-06 | Phase 10 | Complete |
 | SF-01 | Phase 11 | Pending |
 | SF-02 | Phase 11 | Pending |
