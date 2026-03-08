@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import tempfile
+from unittest.mock import MagicMock, patch
 import pytest
 from data.database import Database
 from data.models import (
@@ -256,3 +257,238 @@ class TestGetPersonWithCompany:
         p, c = run_sync(db.get_person_with_company(fetched.id))
         assert p is not None
         assert c is None
+
+
+# ---------------------------------------------------------------
+# Task 2: Email engine tests
+# ---------------------------------------------------------------
+
+from data.email_engine import (
+    _build_variables,
+    _substitute_variables,
+    _score_to_tier,
+    _parse_subject_body,
+    calculate_email_cost,
+    generate_single_email,
+    run_batch_generation,
+    STARTER_TEMPLATES,
+)
+
+
+class TestBuildVariables:
+    def test_full_person_and_company(self):
+        person = Person(
+            first_name="John", last_name="Doe", title="CEO",
+            company_name="Acme Corp",
+        )
+        company = Company(
+            name="Acme Corp", industry="Manufacturing",
+            employee_count=50, city="Austin", state="TX",
+            country="US", description="Makes widgets",
+            founded_year=1990, icp_score=85,
+        )
+        variables = _build_variables(person, company)
+        assert variables["first_name"] == "John"
+        assert variables["last_name"] == "Doe"
+        assert variables["title"] == "CEO"
+        assert variables["company_name"] == "Acme Corp"
+        assert variables["industry"] == "Manufacturing"
+        assert variables["employee_count"] == "50"
+        assert variables["city"] == "Austin"
+        assert variables["state"] == "TX"
+        assert variables["country"] == "US"
+        assert variables["description"] == "Makes widgets"
+        assert variables["founded_year"] == "1990"
+        assert variables["icp_score"] == "85"
+        assert variables["quality_tier"] == "Gold"
+
+    def test_none_fields_fallback_to_empty(self):
+        person = Person(first_name="Jane", last_name="Doe")
+        variables = _build_variables(person, None)
+        assert variables["title"] == ""
+        assert variables["company_name"] == ""
+        assert variables["industry"] == ""
+        assert variables["quality_tier"] == "Unknown"
+
+
+class TestSubstituteVariables:
+    def test_replaces_known_variables(self):
+        template = "Hi {first_name}, I see you work at {company_name}."
+        variables = {"first_name": "John", "company_name": "Acme"}
+        result = _substitute_variables(template, variables)
+        assert result == "Hi John, I see you work at Acme."
+
+    def test_leaves_unknown_variables(self):
+        template = "Hi {first_name}, your {unknown_var} is great."
+        variables = {"first_name": "John"}
+        result = _substitute_variables(template, variables)
+        assert result == "Hi John, your {unknown_var} is great."
+
+    def test_empty_template(self):
+        assert _substitute_variables("", {}) == ""
+
+
+class TestScoreToTier:
+    def test_gold(self):
+        assert _score_to_tier(80) == "Gold"
+        assert _score_to_tier(100) == "Gold"
+
+    def test_silver(self):
+        assert _score_to_tier(60) == "Silver"
+        assert _score_to_tier(79) == "Silver"
+
+    def test_bronze(self):
+        assert _score_to_tier(0) == "Bronze"
+        assert _score_to_tier(59) == "Bronze"
+
+    def test_unknown(self):
+        assert _score_to_tier(None) == "Unknown"
+
+
+class TestParseSubjectBody:
+    def test_standard_format(self):
+        text = "Subject: Hello World\n\nThis is the body of the email."
+        subject, body = _parse_subject_body(text)
+        assert subject == "Hello World"
+        assert body == "This is the body of the email."
+
+    def test_fallback_no_subject_prefix(self):
+        text = "Hello World\n\nThis is the body."
+        subject, body = _parse_subject_body(text)
+        assert subject == "Hello World"
+        assert body == "This is the body."
+
+    def test_multiline_body(self):
+        text = "Subject: Test\n\nLine 1\nLine 2\nLine 3"
+        subject, body = _parse_subject_body(text)
+        assert subject == "Test"
+        assert "Line 1" in body
+        assert "Line 3" in body
+
+
+class TestCalculateEmailCost:
+    def test_basic_calculation(self):
+        # 1000 input tokens, 500 output tokens
+        # Input: 1000/1M * $1.00 = $0.001
+        # Output: 500/1M * $5.00 = $0.0025
+        cost = calculate_email_cost(1000, 500)
+        assert abs(cost - 0.0035) < 1e-10
+
+    def test_zero_tokens(self):
+        assert calculate_email_cost(0, 0) == 0.0
+
+
+def _mock_anthropic_response(text: str = "Subject: Test Subject\n\nTest body text.",
+                              input_tokens: int = 100, output_tokens: int = 200):
+    """Create a mock Anthropic message response."""
+    mock_content = MagicMock()
+    mock_content.text = text
+
+    mock_usage = MagicMock()
+    mock_usage.input_tokens = input_tokens
+    mock_usage.output_tokens = output_tokens
+
+    mock_message = MagicMock()
+    mock_message.content = [mock_content]
+    mock_message.usage = mock_usage
+    return mock_message
+
+
+class TestGenerateSingleEmail:
+    def test_successful_generation(self):
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = _mock_anthropic_response()
+
+        template = EmailTemplate(
+            name="Test", system_prompt="You are a writer.",
+            user_prompt_template="Write to {first_name} at {company_name}.",
+        )
+        person = Person(first_name="John", last_name="Doe", company_name="Acme")
+        company = Company(name="Acme", industry="Tech")
+
+        result = generate_single_email(
+            client=mock_client,
+            template=template,
+            person=person,
+            company=company,
+            campaign_id="camp-1",
+        )
+        assert isinstance(result, GeneratedEmail)
+        assert result.subject == "Test Subject"
+        assert result.body == "Test body text."
+        assert result.status == "draft"
+        assert result.campaign_id == "camp-1"
+        assert result.input_tokens == 100
+        assert result.output_tokens == 200
+        assert result.cost_usd > 0
+
+        # Verify client was called with correct params
+        mock_client.messages.create.assert_called_once()
+        call_kwargs = mock_client.messages.create.call_args
+        assert call_kwargs.kwargs["model"] == "claude-haiku-4-5"
+        assert call_kwargs.kwargs["max_tokens"] == 512
+
+    def test_api_error_returns_failed(self):
+        mock_client = MagicMock()
+        mock_client.messages.create.side_effect = Exception("API Error")
+
+        template = EmailTemplate(
+            name="Test", system_prompt="sys",
+            user_prompt_template="Write to {first_name}.",
+        )
+        person = Person(first_name="John", last_name="Doe")
+
+        result = generate_single_email(
+            client=mock_client,
+            template=template,
+            person=person,
+            company=None,
+            campaign_id="camp-1",
+        )
+        assert result.status == "failed"
+        assert "API Error" in result.body
+
+
+class TestBatchGeneration:
+    def test_processes_all_contacts(self, db):
+        camp = _make_campaign(db, "camp-batch")
+        p1 = _make_person(db, "bp1", "bp1@test.com")
+        p2 = _make_person(db, "bp2", "bp2@test.com")
+
+        with patch("data.email_engine.anthropic") as mock_anthropic_mod:
+            mock_client = MagicMock()
+            mock_client.messages.create.return_value = _mock_anthropic_response()
+            mock_anthropic_mod.Anthropic.return_value = mock_client
+
+            # Seed a template first
+            run_sync(db.seed_default_templates())
+            templates = run_sync(db.get_email_templates())
+            template_id = templates[0].id
+
+            run_batch_generation(
+                campaign_id=camp.id,
+                template_id=template_id,
+                person_ids=[p1.id, p2.id],
+                db_path=db.db_path,
+                api_key="test-key",
+            )
+
+        emails = run_sync(db.get_generated_emails(camp.id))
+        assert len(emails) == 2
+
+
+class TestStarterTemplates:
+    def test_three_templates(self):
+        assert len(STARTER_TEMPLATES) == 3
+
+    def test_template_names(self):
+        names = {t.name for t in STARTER_TEMPLATES}
+        assert "Consultative Intro" in names
+        assert "Case Study Follow-up" in names
+        assert "Breakup" in names
+
+    def test_sequence_steps(self):
+        steps = {t.name: t.sequence_step for t in STARTER_TEMPLATES}
+        assert steps["Consultative Intro"] == 1
+        assert steps["Case Study Follow-up"] == 2
+        assert steps["Breakup"] == 3
