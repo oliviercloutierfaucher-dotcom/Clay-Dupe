@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Full Prospecting Platform
 status: active
-stopped_at: Completed 10-01-PLAN.md
-last_updated: "2026-03-08T01:35:23.127Z"
+stopped_at: Completed 10-03-PLAN.md
+last_updated: "2026-03-08T01:45:51.815Z"
 last_activity: 2026-03-08 — Completed 10-01 (infrastructure hardening)
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 4
-  completed_plans: 2
+  completed_plans: 3
 ---
 
 ---
@@ -71,6 +71,7 @@ Progress: [█████░░░░░] 50%
 |-------|-------|-------|----------|
 | Phase 10 P01 | 6min | 2 tasks | 11 files |
 | Phase 10 P02 | 3min | 2 tasks | 4 files |
+| Phase 10 P03 | 8min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -86,6 +87,8 @@ Recent decisions affecting current work:
 - [Phase 10]: Contact discovery uses sequential processing with 1.5s delay for Apollo rate limits
 - [Phase 10]: Validation logic separated into ui/validation.py for testability
 - [Phase 10]: asyncio.Lock wraps entire _connect() for write serialization simplicity
+- [Phase 10]: Separated website_url from company_domain in ColumnMapper to avoid ambiguity
+- [Phase 10]: map_to_companies deduplicates by normalized domain with first-occurrence-wins COALESCE merge
 
 ### Pending Todos
 
@@ -98,6 +101,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-08T01:35:23.124Z
-Stopped at: Completed 10-01-PLAN.md
+Last session: 2026-03-08T01:45:51.812Z
+Stopped at: Completed 10-03-PLAN.md
 Resume file: None

@@ -16,9 +16,9 @@ Requirements for v2.0 Full Prospecting Platform. Each maps to roadmap phases.
 
 ### Company Sourcing
 
-- [ ] **SRC-01**: User can search for companies via Apollo with ICP filters (employee count, location, industry)
-- [ ] **SRC-02**: User can import company lists from CSV/Excel files
-- [ ] **SRC-03**: User can manually add individual companies (name, domain, industry)
+- [x] **SRC-01**: User can search for companies via Apollo with ICP filters (employee count, location, industry)
+- [x] **SRC-02**: User can import company lists from CSV/Excel files
+- [x] **SRC-03**: User can manually add individual companies (name, domain, industry)
 - [x] **SRC-04**: User can discover contacts at sourced companies via Apollo people search
 - [x] **SRC-05**: System tracks the source of each company (apollo_search, csv_import, manual)
 - [x] **SRC-06**: System auto-scores companies against ICP criteria (employee count, revenue, industry match)
@@ -89,9 +89,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 |-------------|-------|--------|
 | INFRA-01 | Phase 10 | Complete |
 | INFRA-03 | Phase 10 | Complete |
-| SRC-01 | Phase 10 | Pending |
-| SRC-02 | Phase 10 | Pending |
-| SRC-03 | Phase 10 | Pending |
+| SRC-01 | Phase 10 | Complete |
+| SRC-02 | Phase 10 | Complete |
+| SRC-03 | Phase 10 | Complete |
 | SRC-04 | Phase 10 | Complete |
 | SRC-05 | Phase 10 | Complete |
 | SRC-06 | Phase 10 | Complete |
