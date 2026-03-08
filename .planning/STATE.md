@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Full Prospecting Platform
 status: active
-stopped_at: Completed 12-01-PLAN.md
-last_updated: "2026-03-08T12:15:31Z"
-last_activity: 2026-03-08 — Completed 12-01 (email generation backend)
+stopped_at: Completed 12-02-PLAN.md
+last_updated: "2026-03-08T12:25:16Z"
+last_activity: 2026-03-08 — Completed 12-02 (email UI + export)
 progress:
   total_phases: 4
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 8
-  completed_plans: 7
+  completed_plans: 8
 ---
 
 ---
@@ -35,23 +35,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Source, enrich, and qualify target companies with maximum accuracy in a single platform — preventing duplicate outreach to Salesforce contacts and generating personalized emails ready for Outreach.io sequences.
-**Current focus:** Phase 12 - AI Email Generation (next)
+**Current focus:** Phase 12 complete, Phase 13 next
 
 ## Current Position
 
-Phase: 12 of 13 (AI Email Generation + Export)
-Plan: 01 complete (1/2)
-Status: Phase 12 Plan 01 complete, ready for Plan 02
-Last activity: 2026-03-08 — Completed 12-01 (email generation backend)
+Phase: 12 of 13 (AI Email Generation + Export) -- COMPLETE
+Plan: 02 complete (2/2)
+Status: Phase 12 complete, ready for Phase 13
+Last activity: 2026-03-08 — Completed 12-02 (email UI + export)
 
-Progress: [███████░░░] 70%
+Progress: [████████░░] 80%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 7 (v2.0)
-- Average duration: 5.1min
-- Total execution time: 41min
+- Total plans completed: 8 (v2.0)
+- Average duration: 5.4min
+- Total execution time: 47min
 
 **By Phase:**
 
@@ -64,6 +64,7 @@ Progress: [███████░░░] 70%
 | Phase 11 P01 | 5min | 2 tasks | 6 files |
 | Phase 11 P02 | 6min | 3 tasks | 4 files |
 | Phase 12 P01 | 8min | 2 tasks | 8 files |
+| Phase 12 P02 | 6min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -92,10 +93,17 @@ Recent decisions affecting current work:
 - [Phase 12]: Sequential API calls with 1.2s delay over Batch API (cost savings negligible at $2-4/3K emails)
 - [Phase 12]: Prompt caching via cache_control ephemeral on system prompt for batch cost reduction
 - [Phase 12]: All 3 starter templates flagged is_default=True for seed idempotency
+- [Phase 12]: Emails page positioned between Enrich and Analytics in Tools nav
+- [Phase 12]: Only COMPLETED campaigns selectable for email generation
+- [Phase 12]: Expandable st.expander rows for email preview/edit workflow
 
 ### Pending Todos
 
 None.
+
+### Roadmap Evolution
+
+- Phase 12.1 inserted after Phase 12: Production Hardening (URGENT) — Fix 5 critical blockers from audit: auth, SQL injection, CLI crash, infinite polling, settings persistence. Plus CORS/XSRF, .env.example, non-root Docker. Source: .planning/research/PRODUCTION_READINESS_AUDIT.md
 
 ### Blockers/Concerns
 
@@ -104,6 +112,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-08T12:15:31Z
-Stopped at: Completed 12-01-PLAN.md
-Resume file: .planning/phases/12-ai-email-generation-export/12-01-SUMMARY.md
+Last session: 2026-03-08T12:25:16Z
+Stopped at: Completed 12-02-PLAN.md
+Resume file: .planning/phases/12-ai-email-generation-export/12-02-SUMMARY.md

@@ -26,7 +26,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 10: Infrastructure + Company Sourcing** - SQLite write queue, API key validation, and full company sourcing pipeline (Apollo search, CSV import, manual add, contact discovery, ICP scoring) (completed 2026-03-08)
 - [ ] **Phase 11: Salesforce Integration** - Connection management, batch account dedup, and duplicate flagging in enrichment UI
-- [ ] **Phase 12: AI Email Generation + Export** - Claude-powered personalized emails with templates, batch generation, preview/edit, and Outreach.io CSV export
+- [x] **Phase 12: AI Email Generation + Export** - Claude-powered personalized emails with templates, batch generation, preview/edit, and Outreach.io CSV export (completed 2026-03-08)
 - [ ] **Phase 13: Cloud Deployment + Pipeline Polish** - Docker-based cloud deployment and end-to-end pipeline integration testing
 
 ## Phase Details
@@ -80,9 +80,28 @@ Plans:
 - [ ] 12-01-PLAN.md -- Data layer + email generation engine (models, schema, CRUD, Anthropic SDK, variable substitution, batch generation)
 - [ ] 12-02-PLAN.md -- Email UI page (campaign select, template management, generate, preview/edit, approve/reject, CSV export)
 
+### Phase 12.1: Production Hardening (INSERTED)
+
+**Goal**: Fix critical security and reliability blockers before cloud deployment — auth, SQL injection, CLI crash, infinite polling, settings persistence, CORS/XSRF, Docker hardening
+**Depends on**: Phase 12
+**Requirements**: SEC-01, SEC-02, SEC-03, BUG-01, BUG-02, BUG-03, OPS-01, OPS-02
+**Success Criteria** (what must be TRUE):
+  1. Web interface requires authentication before access
+  2. Salesforce SOQL queries use parameterized values (no string interpolation)
+  3. CLI `enrich` and `resume` commands execute without crash
+  4. Icypeas bulk and ContactOut batch polling have timeout guards
+  5. Settings changes persist across app restarts
+  6. CORS/XSRF protection re-enabled in Docker
+  7. Docker container runs as non-root user
+  8. .env.example lists all required environment variables
+**Plans**: TBD
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 12.1 to break down)
+
 ### Phase 13: Cloud Deployment + Pipeline Polish
 **Goal**: Application runs in the cloud via Docker and the full source-to-export pipeline works end-to-end
-**Depends on**: Phase 12
+**Depends on**: Phase 12.1
 **Requirements**: INFRA-02
 **Success Criteria** (what must be TRUE):
   1. Application builds and runs in a Docker container with all dependencies
@@ -103,5 +122,6 @@ Phases execute in numeric order: 10 -> 10.x -> 11 -> 11.x -> 12 -> 12.x -> 13
 |-------|-----------|----------------|--------|-----------|
 | 10. Infrastructure + Company Sourcing | 4/4 | Complete    | 2026-03-08 | - |
 | 11. Salesforce Integration | 2/2 | Complete | 2026-03-08 | - |
-| 12. AI Email Generation + Export | 1/2 | In Progress|  | - |
+| 12. AI Email Generation + Export | 2/2 | Complete   | 2026-03-08 | - |
+| 12.1 Production Hardening (INSERTED) | 0/? | Not started | - | - |
 | 13. Cloud Deployment + Pipeline Polish | v2.0 | 0/? | Not started | - |
