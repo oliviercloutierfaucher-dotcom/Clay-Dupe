@@ -10,6 +10,7 @@ import streamlit as st
 from config.settings import load_settings, Settings, ProviderName
 from data.database import Database
 from ui.styles import inject_clay_theme
+from ui.validation import validate_api_keys, get_validated_providers
 
 
 # ---------------------------------------------------------------------------
@@ -43,24 +44,42 @@ st.set_page_config(
 inject_clay_theme()
 
 # ---------------------------------------------------------------------------
-# Startup provider validation
+# Startup provider validation (cached 5 min via session state)
 # ---------------------------------------------------------------------------
 
 settings = get_settings()
-enabled = settings.get_enabled_providers()
-if not enabled:
+
+
+@st.cache_data(ttl=300)
+def _cached_validate_api_keys() -> dict[str, bool]:
+    """Run API key validation with 5-minute cache."""
+    return validate_api_keys(settings)
+
+
+def get_key_validation_status() -> dict[str, bool]:
+    """Get current API key validation status (cached)."""
+    return _cached_validate_api_keys()
+
+
+key_status = get_key_validation_status()
+valid_providers = [k for k, v in key_status.items() if v]
+invalid_providers = [k for k, v in key_status.items() if not v]
+
+if not valid_providers:
     st.error(
-        "**No API keys configured.** Go to Settings to add your API keys. "
-        "Without at least one provider key, enrichment will not work."
+        "**No valid API keys detected.** Go to Settings to add your API keys. "
+        "Without at least one valid provider key, enrichment will not work."
     )
-else:
-    missing_key_providers = [
-        pname.value for pname, pcfg in settings.providers.items()
-        if pcfg.enabled and not pcfg.api_key
+elif invalid_providers:
+    configured_invalid = [
+        name for name in invalid_providers
+        if settings.providers.get(ProviderName(name), None) is not None
+        and settings.providers[ProviderName(name)].enabled
+        and settings.providers[ProviderName(name)].api_key
     ]
-    if missing_key_providers:
+    if configured_invalid:
         st.warning(
-            f"**Some providers have no API key:** {', '.join(missing_key_providers)}. "
+            f"**Invalid API keys detected:** {', '.join(configured_invalid)}. "
             "These providers will be skipped during enrichment."
         )
 

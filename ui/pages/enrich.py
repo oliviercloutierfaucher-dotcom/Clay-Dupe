@@ -31,7 +31,7 @@ from data.models import (
 )
 
 from data.sync import run_sync
-from ui.app import get_database, get_settings
+from ui.app import get_database, get_settings, get_key_validation_status
 
 logger = logging.getLogger(__name__)
 
@@ -180,6 +180,15 @@ def _run_enrichment_bg(campaign_id: str, db_path: str, settings) -> None:
 # ---------------------------------------------------------------------------
 
 st.header("Enrich")
+
+# Warn if no valid providers exist
+_enrich_key_status = get_key_validation_status()
+_valid_providers = [k for k, v in _enrich_key_status.items() if v]
+if not _valid_providers:
+    st.error(
+        "**No valid API keys detected.** Enrichment cannot run without at least one "
+        "valid provider. Go to Settings to configure and validate your API keys."
+    )
 
 db = get_database()
 settings = get_settings()

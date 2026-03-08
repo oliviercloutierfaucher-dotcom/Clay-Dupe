@@ -36,10 +36,33 @@ def _status_color(status: str) -> str:
 st.header("Overview")
 
 # Retrieve singletons from app.py cache
-from ui.app import get_database, get_settings  # noqa: E402
+from ui.app import get_database, get_settings, get_key_validation_status  # noqa: E402
 
 db = get_database()
 settings = get_settings()
+
+# ---- API Key Status -------------------------------------------------------
+
+key_status = get_key_validation_status()
+with st.container(border=True):
+    st.markdown("**API Key Status**")
+    any_invalid = False
+    status_cols = st.columns(len(key_status) if key_status else 1)
+    for idx, (provider_name, is_valid) in enumerate(key_status.items()):
+        with status_cols[idx]:
+            if is_valid:
+                st.markdown(f":green[**{provider_name.title()}**] :white_check_mark:")
+            else:
+                st.markdown(f":red[**{provider_name.title()}**] :x:")
+                any_invalid = True
+    if any_invalid:
+        invalid_names = [k for k, v in key_status.items() if not v]
+        st.warning(
+            f"Enrichment may be limited -- invalid API keys detected: "
+            f"{', '.join(invalid_names)}"
+        )
+
+st.divider()
 
 # ---- Top-level metric cards ------------------------------------------------
 

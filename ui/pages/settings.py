@@ -14,7 +14,7 @@ from providers.contactout import ContactOutProvider
 from providers.datagma import DatagmaProvider
 
 from data.sync import run_sync
-from ui.app import get_database, get_settings
+from ui.app import get_database, get_settings, get_key_validation_status
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -58,6 +58,16 @@ settings = get_settings()
 
 st.subheader("Provider Configuration")
 
+# Re-validate all keys button
+key_status = get_key_validation_status()
+if st.button(
+    "Re-validate All Keys",
+    icon=":material/refresh:",
+    use_container_width=False,
+):
+    st.cache_data.clear()
+    st.rerun()
+
 for pname in ProviderName:
     pcfg = settings.providers.get(pname)
     if pcfg is None:
@@ -66,7 +76,11 @@ for pname in ProviderName:
     with st.container(border=True):
         header_cols = st.columns([3, 1])
         with header_cols[0]:
-            st.markdown(f"### {pname.value.title()}")
+            prov_valid = key_status.get(pname.value, False)
+            validity_icon = ":white_check_mark:" if prov_valid else ":x:"
+            st.markdown(f"### {pname.value.title()} {validity_icon}")
+            if not prov_valid and pcfg.api_key:
+                st.caption(":red[API key validation failed]")
         with header_cols[1]:
             enabled = st.toggle(
                 "Enabled",
