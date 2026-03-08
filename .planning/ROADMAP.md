@@ -74,12 +74,11 @@ Plans:
   3. User can batch-generate emails for an entire campaign and see progress
   4. User can preview each generated email, edit it inline, and approve or reject before export
   5. User can export approved emails as a CSV with columns matching Outreach.io import format (email, name, subject, body)
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 12-01: TBD
-- [ ] 12-02: TBD
-- [ ] 12-03: TBD
+- [ ] 12-01-PLAN.md -- Data layer + email generation engine (models, schema, CRUD, Anthropic SDK, variable substitution, batch generation)
+- [ ] 12-02-PLAN.md -- Email UI page (campaign select, template management, generate, preview/edit, approve/reject, CSV export)
 
 ### Phase 13: Cloud Deployment + Pipeline Polish
 **Goal**: Application runs in the cloud via Docker and the full source-to-export pipeline works end-to-end
@@ -104,5 +103,5 @@ Phases execute in numeric order: 10 -> 10.x -> 11 -> 11.x -> 12 -> 12.x -> 13
 |-------|-----------|----------------|--------|-----------|
 | 10. Infrastructure + Company Sourcing | 4/4 | Complete    | 2026-03-08 | - |
 | 11. Salesforce Integration | 2/2 | Complete | 2026-03-08 | - |
-| 12. AI Email Generation + Export | v2.0 | 0/? | Not started | - |
+| 12. AI Email Generation + Export | v2.0 | 0/2 | Not started | - |
 | 13. Cloud Deployment + Pipeline Polish | v2.0 | 0/? | Not started | - |
