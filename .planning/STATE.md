@@ -3,11 +3,27 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Full Prospecting Platform
 status: active
+stopped_at: Completed 12.1-02-PLAN.md
+last_updated: "2026-03-08T12:58:13.667Z"
+last_activity: 2026-03-08 — Completed 12-02 (email UI + export)
+progress:
+  total_phases: 5
+  completed_phases: 3
+  total_plans: 10
+  completed_plans: 9
+  percent: 90
+---
+
+---
+gsd_state_version: 1.0
+milestone: v2.0
+milestone_name: Full Prospecting Platform
+status: active
 stopped_at: Completed 12-02-PLAN.md
 last_updated: "2026-03-08T12:25:16Z"
 last_activity: 2026-03-08 — Completed 12-02 (email UI + export)
 progress:
-  total_phases: 4
+  [█████████░] 90%
   completed_phases: 3
   total_plans: 8
   completed_plans: 8
@@ -65,6 +81,7 @@ Progress: [████████░░] 80%
 | Phase 11 P02 | 6min | 3 tasks | 4 files |
 | Phase 12 P01 | 8min | 2 tasks | 8 files |
 | Phase 12 P02 | 6min | 2 tasks | 2 files |
+| Phase 12.1 P02 | 3min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -96,6 +113,8 @@ Recent decisions affecting current work:
 - [Phase 12]: Emails page positioned between Enrich and Analytics in Tools nav
 - [Phase 12]: Only COMPLETED campaigns selectable for email generation
 - [Phase 12]: Expandable st.expander rows for email preview/edit workflow
+- [Phase 12.1]: Auth fallback chain: st.secrets -> APP_PASSWORD env var -> warn and allow access
+- [Phase 12.1]: Settings persistence via dotenv.set_key() with load_dotenv(override=True) reload
 
 ### Pending Todos
 
@@ -112,6 +131,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-08T12:25:16Z
-Stopped at: Completed 12-02-PLAN.md
-Resume file: .planning/phases/12-ai-email-generation-export/12-02-SUMMARY.md
+Last session: 2026-03-08T12:58:13.658Z
+Stopped at: Completed 12.1-02-PLAN.md
+Resume file: None
