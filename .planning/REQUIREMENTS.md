@@ -87,30 +87,30 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SF-01 | TBD | Pending |
-| SF-02 | TBD | Pending |
-| SF-03 | TBD | Pending |
-| SF-04 | TBD | Pending |
-| SRC-01 | TBD | Pending |
-| SRC-02 | TBD | Pending |
-| SRC-03 | TBD | Pending |
-| SRC-04 | TBD | Pending |
-| SRC-05 | TBD | Pending |
-| SRC-06 | TBD | Pending |
-| EMAIL-01 | TBD | Pending |
-| EMAIL-02 | TBD | Pending |
-| EMAIL-03 | TBD | Pending |
-| EMAIL-04 | TBD | Pending |
-| EMAIL-05 | TBD | Pending |
-| INFRA-01 | TBD | Pending |
-| INFRA-02 | TBD | Pending |
-| INFRA-03 | TBD | Pending |
+| INFRA-01 | Phase 10 | Pending |
+| INFRA-03 | Phase 10 | Pending |
+| SRC-01 | Phase 10 | Pending |
+| SRC-02 | Phase 10 | Pending |
+| SRC-03 | Phase 10 | Pending |
+| SRC-04 | Phase 10 | Pending |
+| SRC-05 | Phase 10 | Pending |
+| SRC-06 | Phase 10 | Pending |
+| SF-01 | Phase 11 | Pending |
+| SF-02 | Phase 11 | Pending |
+| SF-03 | Phase 11 | Pending |
+| SF-04 | Phase 11 | Pending |
+| EMAIL-01 | Phase 12 | Pending |
+| EMAIL-02 | Phase 12 | Pending |
+| EMAIL-03 | Phase 12 | Pending |
+| EMAIL-04 | Phase 12 | Pending |
+| EMAIL-05 | Phase 12 | Pending |
+| INFRA-02 | Phase 13 | Pending |
 
 **Coverage:**
 - v2.0 requirements: 18 total
-- Mapped to phases: 0
-- Unmapped: 18
+- Mapped to phases: 18
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-07*
-*Last updated: 2026-03-07 after initial definition*
+*Last updated: 2026-03-07 after roadmap creation*
