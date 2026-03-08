@@ -128,6 +128,30 @@ ICP_PRESETS = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Salesforce config
+# ---------------------------------------------------------------------------
+
+class SalesforceConfig(BaseModel):
+    """Salesforce credentials loaded from environment variables."""
+    username: str = ""
+    password: str = ""
+    security_token: str = ""
+
+    def is_configured(self) -> bool:
+        """Return True only if all three credentials are non-empty."""
+        return bool(self.username and self.password and self.security_token)
+
+
+def load_salesforce_config() -> SalesforceConfig:
+    """Load Salesforce credentials from environment variables."""
+    return SalesforceConfig(
+        username=os.environ.get("SALESFORCE_USERNAME", ""),
+        password=os.environ.get("SALESFORCE_PASSWORD", ""),
+        security_token=os.environ.get("SALESFORCE_SECURITY_TOKEN", ""),
+    )
+
+
 def load_all_icp_profiles(db: Database) -> dict[str, ICPPreset]:
     """Load built-in ICP presets merged with custom profiles from the DB.
 
