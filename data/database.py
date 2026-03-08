@@ -27,6 +27,7 @@ from config.settings import ProviderName
 from data.models import (
     Company, Person, EnrichmentResult, Campaign, CreditUsage,
     CacheEntry, EmailPattern, EnrichmentType, VerificationStatus, CampaignStatus,
+    EmailTemplate, GeneratedEmail,
 )
 
 if sys.version_info < (3, 11):
@@ -1392,3 +1393,180 @@ class Database:
             if row is None:
                 return False
             return row["attempts"] >= min_attempts and row["hits"] == 0
+
+    # ------------------------------------------------------------------
+    # Email Template Operations
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _row_to_email_template(row) -> EmailTemplate:
+        """Convert a Row to an EmailTemplate model."""
+        d = dict(row)
+        d["is_default"] = bool(d.get("is_default", False))
+        return EmailTemplate.model_validate(d)
+
+    @staticmethod
+    def _row_to_generated_email(row) -> GeneratedEmail:
+        """Convert a Row to a GeneratedEmail model."""
+        d = dict(row)
+        return GeneratedEmail.model_validate(d)
+
+    async def save_email_template(self, template: EmailTemplate) -> EmailTemplate:
+        """Insert or replace an email template."""
+        now = datetime.utcnow().isoformat()
+        async with self._connect() as conn:
+            await conn.execute(
+                """INSERT OR REPLACE INTO email_templates
+                   (id, name, description, system_prompt, user_prompt_template,
+                    sequence_step, is_default, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    template.id,
+                    template.name,
+                    template.description,
+                    template.system_prompt,
+                    template.user_prompt_template,
+                    template.sequence_step,
+                    int(template.is_default),
+                    template.created_at.isoformat() if template.created_at else now,
+                    now,
+                ),
+            )
+        return template
+
+    async def get_email_templates(self) -> list[EmailTemplate]:
+        """Return all email templates."""
+        async with self._connect() as conn:
+            cursor = await conn.execute(
+                "SELECT * FROM email_templates ORDER BY sequence_step, name"
+            )
+            rows = await cursor.fetchall()
+            return [self._row_to_email_template(r) for r in rows]
+
+    async def get_email_template(self, template_id: str) -> Optional[EmailTemplate]:
+        """Return a single email template by ID."""
+        async with self._connect() as conn:
+            cursor = await conn.execute(
+                "SELECT * FROM email_templates WHERE id = ?", (template_id,)
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                return None
+            return self._row_to_email_template(row)
+
+    async def delete_email_template(self, template_id: str) -> None:
+        """Delete an email template by ID."""
+        async with self._connect() as conn:
+            await conn.execute(
+                "DELETE FROM email_templates WHERE id = ?", (template_id,)
+            )
+
+    # ------------------------------------------------------------------
+    # Generated Email Operations
+    # ------------------------------------------------------------------
+
+    async def save_generated_email(self, email: GeneratedEmail) -> GeneratedEmail:
+        """Insert or replace a generated email."""
+        now = datetime.utcnow().isoformat()
+        async with self._connect() as conn:
+            await conn.execute(
+                """INSERT OR REPLACE INTO generated_emails
+                   (id, campaign_id, template_id, person_id, company_id,
+                    sequence_step, subject, body, status, user_note,
+                    input_tokens, output_tokens, cost_usd, generated_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    email.id,
+                    email.campaign_id,
+                    email.template_id,
+                    email.person_id,
+                    email.company_id,
+                    email.sequence_step,
+                    email.subject,
+                    email.body,
+                    email.status,
+                    email.user_note,
+                    email.input_tokens,
+                    email.output_tokens,
+                    email.cost_usd,
+                    email.generated_at.isoformat() if email.generated_at else now,
+                    now,
+                ),
+            )
+        return email
+
+    async def get_generated_emails(
+        self, campaign_id: str, status: Optional[str] = None,
+    ) -> list[GeneratedEmail]:
+        """Return generated emails for a campaign, optionally filtered by status."""
+        if status:
+            query = "SELECT * FROM generated_emails WHERE campaign_id = ? AND status = ? ORDER BY generated_at"
+            params: tuple = (campaign_id, status)
+        else:
+            query = "SELECT * FROM generated_emails WHERE campaign_id = ? ORDER BY generated_at"
+            params = (campaign_id,)
+        async with self._connect() as conn:
+            cursor = await conn.execute(query, params)
+            rows = await cursor.fetchall()
+            return [self._row_to_generated_email(r) for r in rows]
+
+    async def update_email_status(self, email_id: str, status: str) -> None:
+        """Update the status of a generated email."""
+        now = datetime.utcnow().isoformat()
+        async with self._connect() as conn:
+            await conn.execute(
+                "UPDATE generated_emails SET status = ?, updated_at = ? WHERE id = ?",
+                (status, now, email_id),
+            )
+
+    async def update_email_content(
+        self, email_id: str, subject: str, body: str,
+    ) -> None:
+        """Update the subject and body of a generated email (inline edit)."""
+        now = datetime.utcnow().isoformat()
+        async with self._connect() as conn:
+            await conn.execute(
+                "UPDATE generated_emails SET subject = ?, body = ?, updated_at = ? WHERE id = ?",
+                (subject, body, now, email_id),
+            )
+
+    async def seed_default_templates(self) -> None:
+        """Insert default starter templates if none with is_default=True exist."""
+        async with self._connect() as conn:
+            cursor = await conn.execute(
+                "SELECT COUNT(*) FROM email_templates WHERE is_default = 1"
+            )
+            count = (await cursor.fetchone())[0]
+            if count > 0:
+                return
+
+        # Import here to avoid circular imports
+        from data.email_engine import STARTER_TEMPLATES
+        for tmpl in STARTER_TEMPLATES:
+            await self.save_email_template(tmpl)
+
+    async def get_person_with_company(
+        self, person_id: str,
+    ) -> tuple[Person, Optional[Company]]:
+        """Return a person and their associated company (if any).
+
+        Looks up company via company_id first, then falls back to
+        company_domain lookup.
+        """
+        person = await self.get_person(person_id)
+        if person is None:
+            raise ValueError(f"Person not found: {person_id}")
+
+        company = None
+        if person.company_id:
+            async with self._connect() as conn:
+                cursor = await conn.execute(
+                    "SELECT * FROM companies WHERE id = ?", (person.company_id,)
+                )
+                row = await cursor.fetchone()
+                if row:
+                    company = self._row_to_company(row)
+        if company is None and person.company_domain:
+            company = await self.get_company_by_domain(person.company_domain)
+
+        return person, company

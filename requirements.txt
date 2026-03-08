@@ -15,5 +15,6 @@ aiosqlite>=0.20
 aiometer>=0.5
 tenacity>=8.2
 simple-salesforce>=1.12.6
+anthropic>=0.40
 pytest>=8.0
 pytest-asyncio>=0.23

@@ -45,6 +45,7 @@ class Settings(BaseModel):
     db_path: str = "clay_dupe.db"
     max_concurrent_requests: int = 5
     icp_presets: dict[str, ICPPreset]
+    anthropic_api_key: str = ""
 
     def get_enabled_providers(self) -> list[ProviderName]:
         """Return providers that are enabled AND have API keys configured."""
@@ -96,12 +97,15 @@ def load_settings() -> Settings:
     cache_ttl = int(os.getenv("CACHE_TTL_DAYS", "30"))
     db_path = os.getenv("DB_PATH", "clay_dupe.db")
 
+    anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "")
+
     return Settings(
         providers=providers,
         waterfall_order=waterfall_order,
         cache_ttl_days=cache_ttl,
         db_path=db_path,
         icp_presets=ICP_PRESETS,
+        anthropic_api_key=anthropic_api_key,
     )
 
 # Hardcoded ICP presets

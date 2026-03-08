@@ -297,6 +297,52 @@ class CacheEntry(BaseModel):
 # EmailPattern
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# EmailTemplate
+# ---------------------------------------------------------------------------
+
+class EmailTemplate(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str = Field(default_factory=_new_uuid)
+    name: str
+    description: Optional[str] = None
+    system_prompt: str
+    user_prompt_template: str
+    sequence_step: int = 1  # 1=Intro, 2=Follow-up, 3=Breakup
+    is_default: bool = False
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
+
+
+# ---------------------------------------------------------------------------
+# GeneratedEmail
+# ---------------------------------------------------------------------------
+
+class GeneratedEmail(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str = Field(default_factory=_new_uuid)
+    campaign_id: str
+    template_id: Optional[str] = None
+    person_id: str
+    company_id: Optional[str] = None
+    sequence_step: int = 1
+    subject: Optional[str] = None
+    body: Optional[str] = None
+    status: str = "draft"  # draft, approved, rejected, failed
+    user_note: Optional[str] = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0.0
+    generated_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
+
+
+# ---------------------------------------------------------------------------
+# EmailPattern
+# ---------------------------------------------------------------------------
+
 class EmailPattern(BaseModel):
     id: str = Field(default_factory=_new_uuid)
     domain: str

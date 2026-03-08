@@ -365,6 +365,51 @@ CREATE TABLE IF NOT EXISTS provider_domain_stats (
 );
 
 -- ============================================================
+-- 12. email_templates
+-- ============================================================
+CREATE TABLE IF NOT EXISTS email_templates (
+    id              TEXT PRIMARY KEY,
+    name            TEXT NOT NULL,
+    description     TEXT,
+    system_prompt   TEXT NOT NULL,
+    user_prompt_template TEXT NOT NULL,
+    sequence_step   INTEGER DEFAULT 1,
+    is_default      BOOLEAN DEFAULT 0,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================================
+-- 13. generated_emails
+-- ============================================================
+CREATE TABLE IF NOT EXISTS generated_emails (
+    id              TEXT PRIMARY KEY,
+    campaign_id     TEXT REFERENCES campaigns(id) ON DELETE CASCADE,
+    template_id     TEXT REFERENCES email_templates(id) ON DELETE SET NULL,
+    person_id       TEXT REFERENCES people(id) ON DELETE CASCADE,
+    company_id      TEXT REFERENCES companies(id) ON DELETE SET NULL,
+    sequence_step   INTEGER DEFAULT 1,
+    subject         TEXT,
+    body            TEXT,
+    status          TEXT DEFAULT 'draft',
+    user_note       TEXT,
+    input_tokens    INTEGER DEFAULT 0,
+    output_tokens   INTEGER DEFAULT 0,
+    cost_usd        REAL DEFAULT 0.0,
+    generated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS ix_generated_emails_campaign
+    ON generated_emails(campaign_id);
+CREATE INDEX IF NOT EXISTS ix_generated_emails_person
+    ON generated_emails(person_id);
+CREATE INDEX IF NOT EXISTS ix_generated_emails_status
+    ON generated_emails(status);
+CREATE INDEX IF NOT EXISTS ix_generated_emails_campaign_status
+    ON generated_emails(campaign_id, status);
+
+-- ============================================================
 -- Schema migrations
 -- ============================================================
 

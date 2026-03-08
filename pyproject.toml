@@ -20,6 +20,7 @@ dependencies = [
     "aiosqlite>=0.20",
     "aiometer>=0.5",
     "tenacity>=8.2",
+    "anthropic>=0.40",
 ]
 
 [project.optional-dependencies]
