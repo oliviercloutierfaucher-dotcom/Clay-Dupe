@@ -27,3 +27,23 @@ jobs:
 
       - name: Run tests
         run: pytest -v
+
+  docker-build:
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t clay-dupe:${{ github.sha }} .
+
+      - name: Verify container starts and health check passes
+        run: |
+          docker run -d --name test-container -p 8501:8501 \
+            -e APP_PASSWORD=test123 \
+            clay-dupe:${{ github.sha }}
+          sleep 15
+          curl --fail http://localhost:8501/_stcore/health || exit 1
+          docker stop test-container
