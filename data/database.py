@@ -43,13 +43,44 @@ class Database:
         self._init_db()
 
     def _init_db(self):
-        """Execute schema.sql to create tables (sync — runs once at startup)."""
+        """Execute schema.sql to create tables (sync — runs once at startup).
+
+        Uses executescript for the main DDL, then runs ALTER TABLE migrations
+        individually so duplicate-column errors on existing DBs are ignored.
+        """
         schema_path = Path(__file__).parent / "schema.sql"
+        schema_text = schema_path.read_text()
+
+        # Split schema into main DDL and ALTER TABLE migrations
+        # Find the "Schema migrations" section marker
+        marker = "-- Schema migrations"
+        if marker in schema_text:
+            main_ddl, migrations_section = schema_text.split(marker, 1)
+        else:
+            main_ddl = schema_text
+            migrations_section = ""
+
         conn = sqlite3.connect(self.db_path)
         try:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA foreign_keys=ON")
-            conn.executescript(schema_path.read_text())
+            conn.executescript(main_ddl)
+
+            # Run migration statements individually (ALTER TABLE may fail on existing DBs)
+            if migrations_section:
+                for statement in migrations_section.split(";"):
+                    # Strip comments and whitespace to find actual SQL
+                    lines = [l for l in statement.strip().splitlines()
+                             if l.strip() and not l.strip().startswith("--")]
+                    stmt = "\n".join(lines).strip()
+                    if not stmt:
+                        continue
+                    try:
+                        conn.execute(stmt)
+                    except sqlite3.OperationalError as e:
+                        if "duplicate column name" in str(e).lower():
+                            continue
+                        raise
             conn.commit()
         finally:
             conn.close()
@@ -305,6 +336,9 @@ class Database:
                         source_type = COALESCE(?, source_type),
                         icp_score = COALESCE(?, icp_score),
                         status = COALESCE(?, status),
+                        sf_account_id = COALESCE(?, sf_account_id),
+                        sf_status = COALESCE(?, sf_status),
+                        sf_instance_url = COALESCE(?, sf_instance_url),
                         enriched_at = COALESCE(?, enriched_at),
                         updated_at = ?
                     WHERE domain = ?""",
@@ -317,6 +351,7 @@ class Database:
                         company.full_address, company.linkedin_url, company.website_url,
                         company.phone, source, company.apollo_id,
                         company.source_type, company.icp_score, company.status,
+                        company.sf_account_id, company.sf_status, company.sf_instance_url,
                         enriched, now, company.domain.strip().lower(),
                     ),
                 )
@@ -332,8 +367,9 @@ class Database:
                         description, city, state, country, full_address,
                         linkedin_url, website_url, phone, source_provider,
                         apollo_id, source_type, icp_score, status,
+                        sf_account_id, sf_status, sf_instance_url,
                         enriched_at, created_at, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         company.id, company.name, company.domain, company.industry,
                         industry_tags_json, company.employee_count, company.employee_range,
@@ -342,6 +378,7 @@ class Database:
                         company.full_address, company.linkedin_url, company.website_url,
                         company.phone, source, company.apollo_id,
                         company.source_type, company.icp_score, company.status,
+                        company.sf_account_id, company.sf_status, company.sf_instance_url,
                         enriched, now, now,
                     ),
                 )
@@ -362,6 +399,38 @@ class Database:
             if row is None:
                 return None
             return self._row_to_company(row)
+
+    async def update_company_sf_status(
+        self, domain: str, sf_account_id: str, sf_instance_url: str
+    ) -> None:
+        """Update SF fields for the company matching the given domain."""
+        domain = domain.strip().lower()
+        now = datetime.utcnow().isoformat()
+        async with self._connect() as conn:
+            await conn.execute(
+                """UPDATE companies SET
+                    sf_account_id = ?,
+                    sf_status = 'in_sf',
+                    sf_instance_url = ?,
+                    updated_at = ?
+                WHERE domain = ?""",
+                (sf_account_id, sf_instance_url, now, domain),
+            )
+
+    async def get_companies_by_sf_status(
+        self, sf_status: Optional[str] = None
+    ) -> list[Company]:
+        """Return companies filtered by sf_status. If None, return all."""
+        async with self._connect() as conn:
+            if sf_status is not None:
+                cursor = await conn.execute(
+                    "SELECT * FROM companies WHERE sf_status = ?",
+                    (sf_status,),
+                )
+            else:
+                cursor = await conn.execute("SELECT * FROM companies")
+            rows = await cursor.fetchall()
+            return [self._row_to_company(r) for r in rows]
 
     async def search_companies(self, **filters) -> list[Company]:
         """Search companies with dynamic filters.

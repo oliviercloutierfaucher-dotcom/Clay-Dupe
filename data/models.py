@@ -94,6 +94,9 @@ class Company(BaseModel):
     source_type: Optional[str] = None  # "apollo_search", "csv_import", "manual"
     icp_score: Optional[int] = None    # 0-100
     status: str = "new"                # "new", "contacted", "skipped"
+    sf_account_id: Optional[str] = None
+    sf_status: Optional[str] = None      # "in_sf" or None
+    sf_instance_url: Optional[str] = None
     enriched_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)

@@ -363,3 +363,13 @@ CREATE TABLE IF NOT EXISTS provider_domain_stats (
     last_attempt    TEXT,
     PRIMARY KEY (provider, domain)
 );
+
+-- ============================================================
+-- Schema migrations
+-- ============================================================
+
+-- Phase 11: Salesforce integration (sf_status values: "in_sf" or NULL)
+ALTER TABLE companies ADD COLUMN sf_account_id TEXT;
+ALTER TABLE companies ADD COLUMN sf_status TEXT;
+ALTER TABLE companies ADD COLUMN sf_instance_url TEXT;
+CREATE INDEX IF NOT EXISTS ix_companies_sf_status ON companies(sf_status);
