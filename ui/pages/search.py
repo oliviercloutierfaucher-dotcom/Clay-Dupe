@@ -211,6 +211,41 @@ if "search_results_df" in st.session_state:
 
     selected_rows = event.selection.rows if event.selection else []
 
+    # ---- Save companies to database ------------------------------------------
+
+    if "search_results_companies" in st.session_state:
+        save_cols = st.columns([3, 2])
+        with save_cols[1]:
+            st.markdown("")  # vertical alignment
+            save_db_btn = st.button(
+                f"Save Selected to Database ({len(selected_rows)})",
+                type="secondary",
+                icon=":material/save:",
+                disabled=len(selected_rows) == 0,
+                key="save_companies_db",
+            )
+
+        if save_db_btn and selected_rows:
+            db = get_database()
+            companies = st.session_state["search_results_companies"]
+            saved_count = 0
+            merged_count = 0
+            for idx in selected_rows:
+                if idx < len(companies):
+                    c = companies[idx]
+                    # Set source_type for Apollo-sourced companies
+                    c.source_type = "apollo_search"
+                    existing = run_sync(db.get_company_by_domain(c.domain)) if c.domain else None
+                    run_sync(db.upsert_company(c))
+                    if existing:
+                        merged_count += 1
+                    else:
+                        saved_count += 1
+            st.success(
+                f"Saved **{saved_count}** companies to database"
+                + (f", merged **{merged_count}** existing." if merged_count else ".")
+            )
+
     # ---- Campaign creation bar (compact) ------------------------------------
 
     create_cols = st.columns([3, 2])
