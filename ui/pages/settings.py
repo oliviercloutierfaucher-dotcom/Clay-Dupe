@@ -6,12 +6,13 @@ from concurrent.futures import ThreadPoolExecutor
 
 import streamlit as st
 
-from config.settings import ProviderName
+from config.settings import ProviderName, load_salesforce_config
 from providers.apollo import ApolloProvider
 from providers.findymail import FindymailProvider
 from providers.icypeas import IcypeasProvider
 from providers.contactout import ContactOutProvider
 from providers.datagma import DatagmaProvider
+from providers.salesforce import SalesforceClient
 
 from data.sync import run_sync
 from ui.app import get_database, get_settings, get_key_validation_status
@@ -53,6 +54,69 @@ st.header("Settings")
 
 db = get_database()
 settings = get_settings()
+
+# ---- Salesforce Integration -------------------------------------------------
+
+st.subheader("Salesforce Integration")
+
+sf_config = load_salesforce_config()
+
+with st.container(border=True):
+    sf_cols = st.columns(3)
+    with sf_cols[0]:
+        sf_username = st.text_input(
+            "Username",
+            value=sf_config.username,
+            key="sf_username",
+            placeholder="your-sf-login@example.com",
+        )
+    with sf_cols[1]:
+        sf_password = st.text_input(
+            "Password",
+            value=sf_config.password,
+            type="password",
+            key="sf_password",
+            placeholder="Enter Salesforce password",
+        )
+    with sf_cols[2]:
+        sf_token = st.text_input(
+            "Security Token",
+            value=sf_config.security_token,
+            type="password",
+            key="sf_security_token",
+            placeholder="Enter security token",
+        )
+
+    sf_btn_cols = st.columns([1, 3])
+    with sf_btn_cols[0]:
+        if st.button(
+            "Test Connection",
+            key="sf_test_connection",
+            disabled=not (sf_username and sf_password and sf_token),
+            use_container_width=True,
+        ):
+            with st.spinner("Connecting to Salesforce..."):
+                try:
+                    from simple_salesforce.exceptions import SalesforceAuthenticationFailed
+
+                    client = SalesforceClient(sf_username, sf_password, sf_token)
+                    result = client.health_check()
+                    st.success(
+                        f"Connected to **{result['org_name']}** "
+                        f"({result['account_count']} accounts)"
+                    )
+                except SalesforceAuthenticationFailed as exc:
+                    st.error(f"Authentication failed: {exc}")
+                except Exception as exc:
+                    st.error(f"Connection failed: {exc}")
+    with sf_btn_cols[1]:
+        st.caption(
+            "Enter your Salesforce credentials above. "
+            "To persist, set SALESFORCE_USERNAME, SALESFORCE_PASSWORD, "
+            "and SALESFORCE_SECURITY_TOKEN in your `.env` file."
+        )
+
+st.divider()
 
 # ---- Provider Configuration Cards -------------------------------------------
 

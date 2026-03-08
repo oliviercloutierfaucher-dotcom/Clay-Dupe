@@ -79,6 +79,54 @@ def validate_api_keys(settings: Settings) -> dict[str, bool]:
     return results
 
 
+def validate_salesforce() -> dict[str, object]:
+    """Validate Salesforce connection if configured.
+
+    Returns a dict with keys:
+    - configured (bool): Whether SF credentials are present.
+    - connected (bool): Whether health_check succeeded.
+    - org_name (str | None): SF org name on success.
+    - account_count (int | None): Number of accounts on success.
+    - error (str | None): Error message on failure.
+    """
+    from config.settings import load_salesforce_config
+
+    sf_config = load_salesforce_config()
+
+    if not sf_config.is_configured():
+        return {
+            "configured": False,
+            "connected": False,
+            "org_name": None,
+            "account_count": None,
+            "error": None,
+        }
+
+    try:
+        from providers.salesforce import SalesforceClient
+
+        client = SalesforceClient(
+            sf_config.username, sf_config.password, sf_config.security_token,
+        )
+        result = client.health_check()
+        return {
+            "configured": True,
+            "connected": True,
+            "org_name": result.get("org_name"),
+            "account_count": result.get("account_count"),
+            "error": None,
+        }
+    except Exception as exc:
+        logger.warning("Salesforce health check failed: %s", exc)
+        return {
+            "configured": True,
+            "connected": False,
+            "org_name": None,
+            "account_count": None,
+            "error": str(exc),
+        }
+
+
 def get_validated_providers(settings: Settings) -> list[ProviderName]:
     """Return waterfall_order filtered to only providers with valid API keys."""
     validation = validate_api_keys(settings)

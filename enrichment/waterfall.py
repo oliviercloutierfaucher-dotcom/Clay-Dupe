@@ -72,6 +72,7 @@ class WaterfallOrchestrator:
         cost_tracker: Optional[Any] = None,
         waterfall_order: Optional[list[ProviderName]] = None,
         verifier: Optional[EmailVerifier] = None,
+        sf_client: Optional[Any] = None,
     ) -> None:
         self.db = db
         self.providers = providers
@@ -81,6 +82,9 @@ class WaterfallOrchestrator:
         self.rate_limiters = rate_limiters
         self.cost_tracker = cost_tracker
         self.verifier = verifier
+        self.sf_client = sf_client
+        # Domains that should bypass the SF dedup gate (set externally)
+        self._force_enrich_domains: set[str] = set()
         # Explicit waterfall order from settings (if provided)
         self._configured_order = waterfall_order
         # Adaptive order computed at first batch run
@@ -132,6 +136,46 @@ class WaterfallOrchestrator:
 
         # --- Determine enrichment type -----------------------------------
         enrichment_type = self._infer_enrichment_type(row)
+
+        # --- 0. Salesforce dedup gate ------------------------------------
+        # Check if domain is already in Salesforce; skip if matched
+        # (unless domain is in force_enrich_domains override set).
+        if (
+            self.sf_client is not None
+            and domain
+            and domain not in self._force_enrich_domains
+        ):
+            try:
+                sf_results = await asyncio.to_thread(
+                    self.sf_client.check_domains_batch, [domain],
+                )
+                if domain in sf_results:
+                    match = sf_results[domain]
+                    await self.db.update_company_sf_status(
+                        domain, match["sf_account_id"], match["sf_instance_url"],
+                    )
+                    logger.info(
+                        "SF dedup: skipping %s (matched SF Account %s)",
+                        domain,
+                        match["sf_account_id"],
+                    )
+                    elapsed_ms = int((time.monotonic() - start_ts) * 1000)
+                    cache_query = self._build_cache_query(row, enrichment_type)
+                    return EnrichmentResult(
+                        campaign_id=campaign_id,
+                        enrichment_type=enrichment_type,
+                        query_input=cache_query,
+                        source_provider=ProviderName.APOLLO,
+                        result_data={"sf_status": "skipped_sf", "sf_account_id": match["sf_account_id"]},
+                        found=False,
+                        response_time_ms=elapsed_ms,
+                    )
+            except Exception:
+                logger.warning(
+                    "SF dedup check failed for %s — proceeding with enrichment",
+                    domain,
+                    exc_info=True,
+                )
 
         # --- 1. Cache check ----------------------------------------------
         cache_query = self._build_cache_query(row, enrichment_type)
@@ -486,9 +530,72 @@ class WaterfallOrchestrator:
             except Exception:
                 logger.debug("Batch dedup pre-fetch failed (non-critical)")
 
+            # --- Batch Salesforce dedup gate for this chunk ----------------
+            sf_skipped_domains: set[str] = set()
+            if self.sf_client is not None:
+                try:
+                    chunk_domains = []
+                    for r in chunk:
+                        d = r.get("company_domain", "")
+                        if d and d not in self._force_enrich_domains:
+                            chunk_domains.append(d)
+                    if chunk_domains:
+                        sf_matches = await asyncio.to_thread(
+                            self.sf_client.check_domains_batch, chunk_domains,
+                        )
+                        for domain, match in sf_matches.items():
+                            try:
+                                await self.db.update_company_sf_status(
+                                    domain, match["sf_account_id"], match["sf_instance_url"],
+                                )
+                            except Exception:
+                                logger.debug("Failed to update SF status for %s", domain)
+                            sf_skipped_domains.add(domain)
+                        if sf_skipped_domains:
+                            logger.info(
+                                "SF dedup: skipping %d/%d domains in chunk",
+                                len(sf_skipped_domains),
+                                len(chunk_domains),
+                            )
+                except Exception:
+                    logger.warning(
+                        "SF batch dedup failed — proceeding with all rows",
+                        exc_info=True,
+                    )
+
             async def _worker(indexed_row: tuple[int, dict, Optional[str]]) -> EnrichmentResult:
                 nonlocal completed
                 index, row, row_id = indexed_row
+
+                # SF batch dedup: skip rows whose domain was already matched
+                row_domain = row.get("company_domain", "")
+                if row_domain and row_domain in sf_skipped_domains:
+                    completed += 1
+                    if progress_callback is not None:
+                        try:
+                            _et = self._infer_enrichment_type(row)
+                            _cq = self._build_cache_query(row, _et)
+                            _skip_result = EnrichmentResult(
+                                campaign_id=campaign_id,
+                                enrichment_type=_et,
+                                query_input=_cq,
+                                source_provider=ProviderName.APOLLO,
+                                result_data={"sf_status": "skipped_sf"},
+                                found=False,
+                                    )
+                            progress_callback(completed, total, _skip_result)
+                        except Exception:
+                            pass
+                    return EnrichmentResult(
+                        campaign_id=campaign_id,
+                        enrichment_type=self._infer_enrichment_type(row),
+                        query_input=self._build_cache_query(
+                            row, self._infer_enrichment_type(row),
+                        ),
+                        source_provider=ProviderName.APOLLO,
+                        result_data={"sf_status": "skipped_sf"},
+                        found=False,
+                    )
 
                 # Mark row as processing
                 if row_id:
