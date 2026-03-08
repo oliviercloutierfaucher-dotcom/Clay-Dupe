@@ -99,3 +99,59 @@ class TestCheckPassword:
             result = check_password()
         assert result is False
         mock_st.error.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Settings persistence tests
+# ---------------------------------------------------------------------------
+
+
+class TestPersistSettings:
+    """Tests for persist_settings() function."""
+
+    @patch("config.settings.load_dotenv")
+    @patch("config.settings.set_key")
+    def test_persist_settings_writes_env(self, mock_set_key, mock_load_dotenv):
+        """persist_settings({"KEY": "val"}) calls set_key for each pair."""
+        from config.settings import persist_settings, _ENV_PATH
+
+        persist_settings({"MY_KEY": "my_value", "OTHER": "data"})
+
+        assert mock_set_key.call_count == 2
+        mock_set_key.assert_any_call(_ENV_PATH, "MY_KEY", "my_value")
+        mock_set_key.assert_any_call(_ENV_PATH, "OTHER", "data")
+
+    @patch("config.settings.load_dotenv")
+    @patch("config.settings.set_key")
+    def test_persist_settings_reloads_env(self, mock_set_key, mock_load_dotenv):
+        """After persist_settings(), load_dotenv(override=True) is called."""
+        from config.settings import persist_settings, _ENV_PATH
+
+        persist_settings({"KEY": "val"})
+
+        mock_load_dotenv.assert_called_with(_ENV_PATH, override=True)
+
+    @patch("config.settings.load_dotenv")
+    @patch("config.settings.set_key")
+    def test_persist_settings_skips_none(self, mock_set_key, mock_load_dotenv):
+        """persist_settings({"KEY": None}) does not call set_key for None values."""
+        from config.settings import persist_settings
+
+        persist_settings({"GOOD": "value", "SKIP": None})
+
+        assert mock_set_key.call_count == 1
+        mock_set_key.assert_called_once()
+        args = mock_set_key.call_args[0]
+        assert args[1] == "GOOD"
+
+    @patch("config.settings.load_dotenv")
+    @patch("config.settings.set_key")
+    def test_persist_settings_waterfall_order(self, mock_set_key, mock_load_dotenv):
+        """Waterfall order serialized as comma-separated string."""
+        from config.settings import persist_settings, _ENV_PATH
+
+        persist_settings({"WATERFALL_ORDER": "apollo,icypeas,findymail"})
+
+        mock_set_key.assert_any_call(
+            _ENV_PATH, "WATERFALL_ORDER", "apollo,icypeas,findymail"
+        )

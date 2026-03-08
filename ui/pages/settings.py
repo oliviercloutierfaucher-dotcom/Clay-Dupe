@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import streamlit as st
 
-from config.settings import ProviderName, load_salesforce_config
+from config.settings import ProviderName, load_salesforce_config, persist_settings
 from providers.apollo import ApolloProvider
 from providers.findymail import FindymailProvider
 from providers.icypeas import IcypeasProvider
@@ -493,7 +493,44 @@ with st.expander(_form_title, expanded=bool(_edit_preset)):
             st.rerun()
 
 st.divider()
+
+# ---- Save All Settings to .env -----------------------------------------------
+
+st.subheader("Save Settings")
 st.caption(
-    "Settings are stored in memory for this session. "
-    "To persist changes, update your `.env` file and restart the application."
+    "Click **Save All Settings** to persist current configuration to the `.env` file. "
+    "Changes will survive app restarts."
 )
+
+if st.button("Save All Settings", type="primary", icon=":material/save:", use_container_width=False, key="save_all_settings"):
+    updates: dict[str, str | None] = {}
+
+    # API keys
+    for pname in ProviderName:
+        pcfg = settings.providers.get(pname)
+        if pcfg is not None and pcfg.api_key:
+            updates[f"{pname.value.upper()}_API_KEY"] = pcfg.api_key
+
+    # Waterfall order
+    updates["WATERFALL_ORDER"] = ",".join(p.value for p in settings.waterfall_order)
+
+    # Cache TTL
+    updates["CACHE_TTL_DAYS"] = str(settings.cache_ttl_days)
+
+    # Salesforce credentials (from current form values)
+    if sf_username:
+        updates["SALESFORCE_USERNAME"] = sf_username
+    if sf_password:
+        updates["SALESFORCE_PASSWORD"] = sf_password
+    if sf_token:
+        updates["SALESFORCE_SECURITY_TOKEN"] = sf_token
+
+    # Anthropic API key
+    if settings.anthropic_api_key:
+        updates["ANTHROPIC_API_KEY"] = settings.anthropic_api_key
+
+    persist_settings(updates)
+    settings.reload_api_keys()
+    st.success("Settings saved to `.env` file.")
+    st.cache_data.clear()
+    st.rerun()

@@ -4,7 +4,9 @@ from __future__ import annotations
 import json
 import os
 from typing import Optional, TYPE_CHECKING
-from dotenv import load_dotenv
+from pathlib import Path
+
+from dotenv import load_dotenv, set_key
 from pydantic import BaseModel, Field
 from enum import Enum
 
@@ -12,6 +14,9 @@ if TYPE_CHECKING:
     from data.database import Database
 
 load_dotenv()
+
+_ENV_PATH = str(Path(__file__).parent.parent / ".env")
+
 
 class ProviderName(str, Enum):
     APOLLO = "apollo"
@@ -107,6 +112,18 @@ def load_settings() -> Settings:
         icp_presets=ICP_PRESETS,
         anthropic_api_key=anthropic_api_key,
     )
+
+def persist_settings(updates: dict[str, str | None]) -> None:
+    """Write settings to .env file and reload environment.
+
+    Skips keys whose value is None.  After writing, reloads the
+    environment so that ``os.getenv()`` reflects updated values.
+    """
+    for key, value in updates.items():
+        if value is not None:
+            set_key(_ENV_PATH, key, value)
+    load_dotenv(_ENV_PATH, override=True)
+
 
 # Hardcoded ICP presets
 ICP_PRESETS = {
