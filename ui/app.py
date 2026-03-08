@@ -126,7 +126,7 @@ with _toolbar_credits:
     st.caption("Credits remaining: --")
 
 with _toolbar_action:
-    if st.button("Enrich Data", type="primary", icon=":material/bolt:", use_container_width=True):
+    if st.button("Enrich Data", type="primary", icon=":material/bolt:", use_container_width=True, key="toolbar_enrich"):
         st.switch_page("pages/enrich.py")
 
 # ---------------------------------------------------------------------------
