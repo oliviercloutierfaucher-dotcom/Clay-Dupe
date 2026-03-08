@@ -5,12 +5,56 @@ and wires up the multi-page navigation using ``st.navigation()``.
 """
 from __future__ import annotations
 
+import hmac
+import os
+
 import streamlit as st
 
 from config.settings import load_settings, Settings, ProviderName
 from data.database import Database
 from ui.styles import inject_clay_theme
 from ui.validation import validate_api_keys, get_validated_providers, validate_salesforce
+
+
+# ---------------------------------------------------------------------------
+# Authentication gate
+# ---------------------------------------------------------------------------
+
+
+def _get_app_password() -> str:
+    """Get app password from secrets.toml or environment variable."""
+    try:
+        return st.secrets["APP_PASSWORD"]
+    except (KeyError, FileNotFoundError):
+        return os.getenv("APP_PASSWORD", "")
+
+
+def check_password() -> bool:
+    """Show login form and return True if authenticated.
+
+    Fallback chain: st.secrets -> APP_PASSWORD env var -> warn and allow.
+    Uses hmac.compare_digest for timing-safe comparison.
+    """
+    if st.session_state.get("authenticated"):
+        return True
+
+    password = _get_app_password()
+    if not password:
+        st.warning(
+            "No APP_PASSWORD configured. "
+            "Set it in .streamlit/secrets.toml or as environment variable."
+        )
+        return True
+
+    st.markdown("### Clay-Dupe Login")
+    entered = st.text_input("Password", type="password", key="login_password")
+    if st.button("Log in", type="primary"):
+        if hmac.compare_digest(entered, password):
+            st.session_state["authenticated"] = True
+            st.rerun()
+        else:
+            st.error("Incorrect password")
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -64,6 +108,10 @@ if _is_entry_point():
     )
 
     inject_clay_theme()
+
+    # Authentication gate -- blocks all pages until authenticated
+    if not check_password():
+        st.stop()
 
     # Startup provider validation
     settings = get_settings()
