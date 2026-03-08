@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Full Prospecting Platform
 status: active
-stopped_at: Completed 12.1-02-PLAN.md
-last_updated: "2026-03-08T12:58:13.667Z"
-last_activity: 2026-03-08 — Completed 12-02 (email UI + export)
+stopped_at: Completed 12.1-01-PLAN.md
+last_updated: "2026-03-08T12:58:24Z"
+last_activity: 2026-03-08 — Completed 12.1-01 (security & bug fixes)
 progress:
   total_phases: 5
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 10
-  completed_plans: 9
-  percent: 90
+  completed_plans: 10
+  percent: 100
 ---
 
 ---
@@ -51,23 +51,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Source, enrich, and qualify target companies with maximum accuracy in a single platform — preventing duplicate outreach to Salesforce contacts and generating personalized emails ready for Outreach.io sequences.
-**Current focus:** Phase 12 complete, Phase 13 next
+**Current focus:** Phase 12.1 complete, Phase 13 next
 
 ## Current Position
 
-Phase: 12 of 13 (AI Email Generation + Export) -- COMPLETE
+Phase: 12.1 of 13 (Production Hardening) -- COMPLETE
 Plan: 02 complete (2/2)
-Status: Phase 12 complete, ready for Phase 13
-Last activity: 2026-03-08 — Completed 12-02 (email UI + export)
+Status: Phase 12.1 complete, ready for Phase 13
+Last activity: 2026-03-08 — Completed 12.1-01 (security & bug fixes)
 
-Progress: [████████░░] 80%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 8 (v2.0)
-- Average duration: 5.4min
-- Total execution time: 47min
+- Total plans completed: 10 (v2.0)
+- Average duration: 5.2min
+- Total execution time: 55min
 
 **By Phase:**
 
@@ -81,6 +81,7 @@ Progress: [████████░░] 80%
 | Phase 11 P02 | 6min | 3 tasks | 4 files |
 | Phase 12 P01 | 8min | 2 tasks | 8 files |
 | Phase 12 P02 | 6min | 2 tasks | 2 files |
+| Phase 12.1 P01 | 5min | 2 tasks | 8 files |
 | Phase 12.1 P02 | 3min | 2 tasks | 4 files |
 
 ## Accumulated Context
@@ -113,6 +114,9 @@ Recent decisions affecting current work:
 - [Phase 12]: Emails page positioned between Enrich and Analytics in Tools nav
 - [Phase 12]: Only COMPLETED campaigns selectable for email generation
 - [Phase 12]: Expandable st.expander rows for email preview/edit workflow
+- [Phase 12.1]: SOQL escaping order: backslashes first, then quotes, then LIKE wildcards
+- [Phase 12.1]: Icypeas timeout uses time.monotonic() deadline for clock-monotonic safety
+- [Phase 12.1]: ContactOut iteration guard returns empty list on exhaustion (graceful degradation)
 - [Phase 12.1]: Auth fallback chain: st.secrets -> APP_PASSWORD env var -> warn and allow access
 - [Phase 12.1]: Settings persistence via dotenv.set_key() with load_dotenv(override=True) reload
 
@@ -131,6 +135,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-08T12:58:13.658Z
-Stopped at: Completed 12.1-02-PLAN.md
-Resume file: None
+Last session: 2026-03-08T12:58:24Z
+Stopped at: Completed 12.1-01-PLAN.md
+Resume file: .planning/phases/12.1-production-hardening/12.1-01-SUMMARY.md

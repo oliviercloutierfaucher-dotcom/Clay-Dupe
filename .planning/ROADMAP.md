@@ -124,5 +124,5 @@ Phases execute in numeric order: 10 -> 10.x -> 11 -> 11.x -> 12 -> 12.x -> 13
 | 10. Infrastructure + Company Sourcing | 4/4 | Complete    | 2026-03-08 | - |
 | 11. Salesforce Integration | 2/2 | Complete | 2026-03-08 | - |
 | 12. AI Email Generation + Export | 2/2 | Complete   | 2026-03-08 | - |
-| 12.1 Production Hardening (INSERTED) | 1/2 | In Progress|  | - |
+| 12.1 Production Hardening (INSERTED) | 2/2 | Complete   | 2026-03-08 | - |
 | 13. Cloud Deployment + Pipeline Polish | v2.0 | 0/? | Not started | - |
