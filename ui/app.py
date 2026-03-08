@@ -10,7 +10,7 @@ import streamlit as st
 from config.settings import load_settings, Settings, ProviderName
 from data.database import Database
 from ui.styles import inject_clay_theme
-from ui.validation import validate_api_keys, get_validated_providers
+from ui.validation import validate_api_keys, get_validated_providers, validate_salesforce
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +90,14 @@ if _is_entry_point():
                 "These providers will be skipped during enrichment."
             )
 
+    # Salesforce connection status
+    sf_status = validate_salesforce()
+    if sf_status.get("configured") and not sf_status.get("connected"):
+        st.warning(
+            "**Salesforce connection failed.** SF dedup will be skipped during enrichment. "
+            "Check your credentials in Settings."
+        )
+
     # Navigation
     data_pages = [
         st.Page("pages/dashboard.py", title="Overview", icon=":material/dashboard:"),
@@ -100,6 +108,7 @@ if _is_entry_point():
 
     tools_pages = [
         st.Page("pages/enrich.py", title="Enrich", icon=":material/bolt:"),
+        st.Page("pages/emails.py", title="Emails", icon=":material/email:"),
         st.Page("pages/analytics.py", title="Analytics", icon=":material/bar_chart:"),
         st.Page("pages/settings.py", title="Settings", icon=":material/settings:"),
     ]
