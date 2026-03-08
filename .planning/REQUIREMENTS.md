@@ -12,7 +12,7 @@ Requirements for v2.0 Full Prospecting Platform. Each maps to roadmap phases.
 - [x] **SF-01**: User can configure Salesforce connection credentials in settings page
 - [x] **SF-02**: User can test Salesforce connection and see success/failure status
 - [x] **SF-03**: System checks if company domain exists as Account in Salesforce before enrichment
-- [ ] **SF-04**: System flags rows that match existing Salesforce accounts in the enrichment UI
+- [x] **SF-04**: System flags rows that match existing Salesforce accounts in the enrichment UI
 
 ### Company Sourcing
 
@@ -98,7 +98,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SF-01 | Phase 11 | Complete |
 | SF-02 | Phase 11 | Complete |
 | SF-03 | Phase 11 | Complete |
-| SF-04 | Phase 11 | Pending |
+| SF-04 | Phase 11 | Complete |
 | EMAIL-01 | Phase 12 | Pending |
 | EMAIL-02 | Phase 12 | Pending |
 | EMAIL-03 | Phase 12 | Pending |

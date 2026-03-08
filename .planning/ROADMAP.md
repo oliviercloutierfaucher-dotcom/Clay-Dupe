@@ -61,8 +61,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 11-01-PLAN.md -- SF client module, config model, database schema extensions, and unit tests
-- [ ] 11-02-PLAN.md -- Settings UI card, pre-enrichment dedup gate, companies page SF status display
+- [x] 11-01-PLAN.md -- SF client module, config model, database schema extensions, and unit tests
+- [x] 11-02-PLAN.md -- Settings UI card, pre-enrichment dedup gate, companies page SF status display
 
 ### Phase 12: AI Email Generation + Export
 **Goal**: Users can generate personalized cold emails from enriched data and export them ready for Outreach.io sequences
@@ -103,6 +103,6 @@ Phases execute in numeric order: 10 -> 10.x -> 11 -> 11.x -> 12 -> 12.x -> 13
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 10. Infrastructure + Company Sourcing | 4/4 | Complete    | 2026-03-08 | - |
-| 11. Salesforce Integration | 1/2 | In Progress|  | - |
+| 11. Salesforce Integration | 2/2 | Complete | 2026-03-08 | - |
 | 12. AI Email Generation + Export | v2.0 | 0/? | Not started | - |
 | 13. Cloud Deployment + Pipeline Polish | v2.0 | 0/? | Not started | - |
