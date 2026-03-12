@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -10,6 +11,11 @@ import httpx
 from config.settings import ProviderName
 from data.models import Company, Person
 from providers.base import BaseProvider, ProviderResponse
+from providers.validators import validate_domain, validate_linkedin_url, validate_name
+
+logger = logging.getLogger(__name__)
+
+MAX_POLL_ITERATIONS = 60  # Maximum polling iterations for batch jobs
 
 
 class ContactOutProvider(BaseProvider):
@@ -113,6 +119,9 @@ class ContactOutProvider(BaseProvider):
         if self._is_linkedin_url(domain):
             return await self.find_email_by_linkedin(domain)
 
+        first_name = validate_name("ContactOut", first_name, "first_name")
+        last_name = validate_name("ContactOut", last_name, "last_name")
+        domain = validate_domain("ContactOut", domain)
         # Fall back to name + company enrichment
         payload = {
             "first_name": first_name,
@@ -142,6 +151,7 @@ class ContactOutProvider(BaseProvider):
         The ``include`` parameter is **required** -- without it no emails
         are returned by the API.
         """
+        linkedin_url = validate_linkedin_url("ContactOut", linkedin_url)
         params = {
             "profile": linkedin_url,
             "include": "work_email,personal_email",
@@ -229,6 +239,7 @@ class ContactOutProvider(BaseProvider):
 
     async def enrich_company(self, domain: str) -> ProviderResponse:
         """Enrich a company via GET /v1/domain/enrich?domain=<domain>."""
+        domain = validate_domain("ContactOut", domain)
         try:
             data, elapsed = await self._get(
                 "/v1/domain/enrich", params={"domain": domain},
@@ -337,12 +348,23 @@ class ContactOutProvider(BaseProvider):
         ]
 
     async def _poll_batch_job(self, job_id: str) -> list[ProviderResponse]:
-        """Poll ``GET /v2/people/linkedin/batch/<job_id>`` every 3 seconds
-        until the job reaches ``status == "DONE"``."""
+        """Poll ``GET /v2/people/linkedin/batch/<job_id>`` with adaptive
+        backoff (1s -> 5s max) until the job reaches ``status == "DONE"``."""
         poll_url = f"/v2/people/linkedin/batch/{job_id}"
+        poll_interval = 1.0   # start fast, back off exponentially
+        max_interval = 5.0
+        iterations = 0
 
         while True:
-            await asyncio.sleep(3)
+            iterations += 1
+            if iterations > MAX_POLL_ITERATIONS:
+                logger.warning(
+                    "ContactOut batch polling exceeded %d iterations",
+                    MAX_POLL_ITERATIONS,
+                )
+                return []
+            await asyncio.sleep(poll_interval)
+            poll_interval = min(poll_interval * 1.5, max_interval)
 
             try:
                 data, elapsed = await self._get(poll_url)
@@ -387,8 +409,6 @@ class ContactOutProvider(BaseProvider):
     async def health_check(self) -> bool:
         """Verify the token is valid by making a lightweight API call."""
         try:
-            # Use the domain enrich endpoint with a known domain as a
-            # lightweight connectivity test.
             await self._get(
                 "/v1/domain/enrich", params={"domain": "contactout.com"},
             )
@@ -397,6 +417,16 @@ class ContactOutProvider(BaseProvider):
             # A 404 is fine (just means no data), but 401 means bad token.
             if exc.response.status_code == 404:
                 return True
+            logger.warning(
+                "ContactOut health check failed: HTTP %d",
+                exc.response.status_code,
+            )
             return False
-        except Exception:
+        except httpx.TimeoutException:
+            logger.warning("ContactOut health check failed: timeout")
+            return False
+        except OSError as exc:
+            logger.warning(
+                "ContactOut health check failed: connection error: %s", exc,
+            )
             return False

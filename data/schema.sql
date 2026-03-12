@@ -28,6 +28,9 @@ CREATE TABLE IF NOT EXISTS companies (
     phone             TEXT,
     source_provider   TEXT,
     apollo_id         TEXT,
+    source_type       TEXT DEFAULT 'apollo_search',
+    icp_score         INTEGER,
+    status            TEXT DEFAULT 'new',
     enriched_at       TIMESTAMP,
     created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -56,6 +59,27 @@ CREATE INDEX IF NOT EXISTS ix_companies_ebitda_usd
 
 CREATE INDEX IF NOT EXISTS ix_companies_icp_filter
     ON companies(country, employee_count, ebitda_usd);
+
+CREATE INDEX IF NOT EXISTS ix_companies_status
+    ON companies(status);
+
+CREATE INDEX IF NOT EXISTS ix_companies_icp_score
+    ON companies(icp_score);
+
+CREATE INDEX IF NOT EXISTS ix_companies_source_type
+    ON companies(source_type);
+
+-- ============================================================
+-- 1b. icp_profiles
+-- ============================================================
+CREATE TABLE IF NOT EXISTS icp_profiles (
+    id              TEXT PRIMARY KEY,
+    name            TEXT NOT NULL UNIQUE,
+    config          TEXT NOT NULL,              -- JSON object
+    is_default      BOOLEAN DEFAULT 0,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
 -- ============================================================
 -- 2. people
@@ -190,6 +214,16 @@ CREATE INDEX IF NOT EXISTS ix_enrichment_results_found
 CREATE INDEX IF NOT EXISTS ix_enrichment_results_provider_found_at
     ON enrichment_results(source_provider, found, found_at);
 
+CREATE INDEX IF NOT EXISTS ix_enrichment_results_found_at
+    ON enrichment_results(found_at DESC);
+
+CREATE INDEX IF NOT EXISTS ix_enrichment_results_campaign_found
+    ON enrichment_results(campaign_id, found);
+
+CREATE INDEX IF NOT EXISTS ix_enrichment_results_person_position
+    ON enrichment_results(campaign_id, person_id, waterfall_position)
+    WHERE found = 1;
+
 -- ============================================================
 -- 5. campaign_rows
 -- ============================================================
@@ -232,6 +266,9 @@ CREATE TABLE IF NOT EXISTS credit_usage (
 CREATE INDEX IF NOT EXISTS ix_credit_usage_provider_date
     ON credit_usage(provider, date DESC);
 
+CREATE INDEX IF NOT EXISTS ix_credit_usage_date_provider
+    ON credit_usage(date DESC, provider);
+
 -- ============================================================
 -- 7. cache
 -- ============================================================
@@ -252,6 +289,10 @@ CREATE INDEX IF NOT EXISTS ix_cache_provider_type
 
 CREATE INDEX IF NOT EXISTS ix_cache_expires_at
     ON cache(expires_at);
+
+-- Composite index for fast cache lookups by provider + type + hash with expiry filter.
+CREATE INDEX IF NOT EXISTS ix_cache_lookup
+    ON cache(provider, enrichment_type, query_hash, expires_at);
 
 -- Trigger: after inserting a new cache row, delete up to 100 expired rows.
 CREATE TRIGGER IF NOT EXISTS trg_cache_cleanup
@@ -310,3 +351,70 @@ CREATE INDEX IF NOT EXISTS ix_audit_log_timestamp
 
 CREATE INDEX IF NOT EXISTS ix_audit_log_user_timestamp
     ON audit_log(user_id, timestamp DESC);
+
+-- ============================================================
+-- 11. provider_domain_stats — track hit/miss rates per provider per domain
+-- ============================================================
+CREATE TABLE IF NOT EXISTS provider_domain_stats (
+    provider        TEXT NOT NULL,
+    domain          TEXT NOT NULL,
+    attempts        INTEGER DEFAULT 0,
+    hits            INTEGER DEFAULT 0,
+    last_attempt    TEXT,
+    PRIMARY KEY (provider, domain)
+);
+
+-- ============================================================
+-- 12. email_templates
+-- ============================================================
+CREATE TABLE IF NOT EXISTS email_templates (
+    id              TEXT PRIMARY KEY,
+    name            TEXT NOT NULL,
+    description     TEXT,
+    system_prompt   TEXT NOT NULL,
+    user_prompt_template TEXT NOT NULL,
+    sequence_step   INTEGER DEFAULT 1,
+    is_default      BOOLEAN DEFAULT 0,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================================
+-- 13. generated_emails
+-- ============================================================
+CREATE TABLE IF NOT EXISTS generated_emails (
+    id              TEXT PRIMARY KEY,
+    campaign_id     TEXT REFERENCES campaigns(id) ON DELETE CASCADE,
+    template_id     TEXT REFERENCES email_templates(id) ON DELETE SET NULL,
+    person_id       TEXT REFERENCES people(id) ON DELETE CASCADE,
+    company_id      TEXT REFERENCES companies(id) ON DELETE SET NULL,
+    sequence_step   INTEGER DEFAULT 1,
+    subject         TEXT,
+    body            TEXT,
+    status          TEXT DEFAULT 'draft',
+    user_note       TEXT,
+    input_tokens    INTEGER DEFAULT 0,
+    output_tokens   INTEGER DEFAULT 0,
+    cost_usd        REAL DEFAULT 0.0,
+    generated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS ix_generated_emails_campaign
+    ON generated_emails(campaign_id);
+CREATE INDEX IF NOT EXISTS ix_generated_emails_person
+    ON generated_emails(person_id);
+CREATE INDEX IF NOT EXISTS ix_generated_emails_status
+    ON generated_emails(status);
+CREATE INDEX IF NOT EXISTS ix_generated_emails_campaign_status
+    ON generated_emails(campaign_id, status);
+
+-- ============================================================
+-- Schema migrations
+-- ============================================================
+
+-- Phase 11: Salesforce integration (sf_status values: "in_sf" or NULL)
+ALTER TABLE companies ADD COLUMN sf_account_id TEXT;
+ALTER TABLE companies ADD COLUMN sf_status TEXT;
+ALTER TABLE companies ADD COLUMN sf_instance_url TEXT;
+CREATE INDEX IF NOT EXISTS ix_companies_sf_status ON companies(sf_status);

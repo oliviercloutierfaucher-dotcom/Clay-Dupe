@@ -129,7 +129,14 @@ def get_provider_sequence(
         })
 
     elif category == RouteCategory.EMAIL_ONLY:
-        # Already have email, just verify it
+        # Free local verification first (syntax + MX + SMTP probe)
+        steps.append({
+            "action": "verify_email_local",
+            "provider": None,
+            "is_free": True,
+            "description": "Verify email locally via DNS/SMTP probe",
+        })
+        # Paid external verification as fallback
         steps.append({
             "action": "verify_email",
             "provider": ProviderName.FINDYMAIL,

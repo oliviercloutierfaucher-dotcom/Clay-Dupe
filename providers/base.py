@@ -1,14 +1,36 @@
 """Abstract base class for all enrichment providers."""
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional, Any
 import time
 import httpx
+from tenacity import (
+    retry,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_exponential,
+    before_sleep_log,
+)
 
 from config.settings import ProviderName
 from data.models import Company, Person
+from providers.http_pool import get_shared_client
+
+logger = logging.getLogger(__name__)
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    """Return True for transient errors that should be retried."""
+    if isinstance(exc, httpx.TimeoutException):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in (429, 500, 502, 503, 504)
+    if isinstance(exc, OSError):
+        return True
+    return False
 
 
 @dataclass
@@ -37,15 +59,23 @@ class BaseProvider(ABC):
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
-            self._client = httpx.AsyncClient(
-                timeout=30.0,
-                limits=httpx.Limits(max_connections=100, max_keepalive_connections=30),
-            )
+            self._client = get_shared_client()
         return self._client
 
+    @retry(
+        retry=retry_if_exception(_is_retryable),
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
+        reraise=True,
+    )
     async def _request(self, method: str, url: str, **kwargs) -> tuple[dict, int]:
         """Make an HTTP request and return (response_json, elapsed_ms).
-        Subclasses should use this for all API calls."""
+
+        Retries up to 3 times with exponential backoff on transient
+        errors (429, 5xx, timeouts, connection errors).
+        Non-retryable errors (401, 403, 422) propagate immediately.
+        """
         client = await self._get_client()
         start = time.monotonic()
         response = await client.request(method, url, **kwargs)
@@ -99,11 +129,26 @@ class BaseProvider(ABC):
         try:
             await self.check_credits()
             return True
-        except Exception:
+        except httpx.HTTPStatusError as exc:
+            logger.warning(
+                "%s health check failed: HTTP %d",
+                self.name.value, exc.response.status_code,
+            )
+            return False
+        except httpx.TimeoutException:
+            logger.warning("%s health check failed: timeout", self.name.value)
+            return False
+        except OSError as exc:
+            logger.warning(
+                "%s health check failed: connection error: %s",
+                self.name.value, exc,
+            )
             return False
 
     async def close(self):
-        """Close the HTTP client."""
-        if self._client:
-            await self._client.aclose()
-            self._client = None
+        """Detach from the HTTP client.
+
+        Does NOT close the shared pool — call
+        :func:`providers.http_pool.close_shared_client` at shutdown.
+        """
+        self._client = None

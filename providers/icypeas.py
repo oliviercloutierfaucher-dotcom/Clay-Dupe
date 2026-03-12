@@ -2,13 +2,20 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 from typing import Optional
 
 import httpx
 
 from providers.base import BaseProvider, ProviderResponse
+from providers.validators import validate_domain, validate_email, validate_name
 from config.settings import ProviderName
 from data.models import Company, Person
+
+logger = logging.getLogger(__name__)
+
+MAX_POLL_TIMEOUT = 300  # Maximum seconds to poll for bulk results
 
 
 class IcypeasProvider(BaseProvider):
@@ -49,6 +56,9 @@ class IcypeasProvider(BaseProvider):
         self, first_name: str, last_name: str, domain: str
     ) -> ProviderResponse:
         """POST /api/sync/email-search — find email by name + domain."""
+        first_name = validate_name("Icypeas", first_name, "first_name")
+        last_name = validate_name("Icypeas", last_name, "last_name")
+        domain = validate_domain("Icypeas", domain)
         url = f"{self.base_url}/sync/email-search"
         payload = {
             "firstname": first_name,
@@ -111,6 +121,7 @@ class IcypeasProvider(BaseProvider):
     # ------------------------------------------------------------------
     async def verify_email(self, email: str) -> ProviderResponse:
         """POST /api/sync/email-verification — verify a single email."""
+        email = validate_email("Icypeas", email)
         url = f"{self.base_url}/sync/email-verification"
         payload = {"email": email}
 
@@ -148,7 +159,7 @@ class IcypeasProvider(BaseProvider):
 
         1. Submit bulk job via POST /api/bulk (max 5000 rows).
         2. Poll results via POST /api/bulk-single-searchs/read.
-        3. Poll every 2 seconds until all rows are resolved.
+        3. Poll with adaptive backoff (1s -> 5s max) until all rows are resolved.
         4. Paginate with limit=100 and next=true.
         """
         if not rows:
@@ -194,8 +205,17 @@ class IcypeasProvider(BaseProvider):
         collected_items: list[dict] = []
         total_expected = len(rows)
 
+        poll_interval = 1.0   # start fast, back off exponentially
+        max_interval = 5.0
+        deadline = time.monotonic() + MAX_POLL_TIMEOUT
         while len(collected_items) < total_expected:
-            await asyncio.sleep(2)
+            if time.monotonic() > deadline:
+                logger.warning(
+                    "Icypeas bulk polling timed out after %ds", MAX_POLL_TIMEOUT,
+                )
+                break
+            await asyncio.sleep(poll_interval)
+            poll_interval = min(poll_interval * 1.5, max_interval)
 
             # Paginate through available results
             page_items: list[dict] = []
@@ -307,7 +327,16 @@ class IcypeasProvider(BaseProvider):
         try:
             resp = await self.find_email("test", "user", "example.com")
             return resp.error is None
-        except Exception:
+        except httpx.HTTPStatusError as exc:
+            logger.warning(
+                "Icypeas health check failed: HTTP %d", exc.response.status_code,
+            )
+            return False
+        except httpx.TimeoutException:
+            logger.warning("Icypeas health check failed: timeout")
+            return False
+        except OSError as exc:
+            logger.warning("Icypeas health check failed: connection error: %s", exc)
             return False
 
     # ------------------------------------------------------------------

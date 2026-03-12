@@ -1,17 +1,29 @@
 """Load config from .env + provide ICP presets."""
+from __future__ import annotations
+
+import json
 import os
-from typing import Optional
-from dotenv import load_dotenv
+from typing import Optional, TYPE_CHECKING
+from pathlib import Path
+
+from dotenv import load_dotenv, set_key
 from pydantic import BaseModel, Field
 from enum import Enum
 
+if TYPE_CHECKING:
+    from data.database import Database
+
 load_dotenv()
+
+_ENV_PATH = str(Path(__file__).parent.parent / ".env")
+
 
 class ProviderName(str, Enum):
     APOLLO = "apollo"
     FINDYMAIL = "findymail"
     ICYPEAS = "icypeas"
     CONTACTOUT = "contactout"
+    DATAGMA = "datagma"
 
 class ProviderConfig(BaseModel):
     name: ProviderName
@@ -38,6 +50,41 @@ class Settings(BaseModel):
     db_path: str = "clay_dupe.db"
     max_concurrent_requests: int = 5
     icp_presets: dict[str, ICPPreset]
+    anthropic_api_key: str = ""
+
+    def get_enabled_providers(self) -> list[ProviderName]:
+        """Return providers that are enabled AND have API keys configured."""
+        return [
+            pname for pname, pcfg in self.providers.items()
+            if pcfg.enabled and pcfg.api_key
+        ]
+
+    def validate_waterfall_order(self) -> list[ProviderName]:
+        """Filter waterfall_order to only include enabled providers with keys."""
+        enabled = set(self.get_enabled_providers())
+        return [p for p in self.waterfall_order if p in enabled]
+
+    def reload_api_keys(self) -> dict[ProviderName, bool]:
+        """Re-read API keys from .env without restarting.
+
+        Returns a dict mapping each provider to whether its key changed.
+        """
+        load_dotenv(override=True)
+        changed: dict[ProviderName, bool] = {}
+        for pname in ProviderName:
+            env_key = f"{pname.value.upper()}_API_KEY"
+            new_key = os.getenv(env_key, "")
+            pcfg = self.providers.get(pname)
+            if pcfg is not None:
+                old_key = pcfg.api_key
+                if new_key != old_key:
+                    pcfg.api_key = new_key
+                    changed[pname] = True
+                else:
+                    changed[pname] = False
+            else:
+                changed[pname] = False
+        return changed
 
 def load_settings() -> Settings:
     """Load settings from environment variables."""
@@ -49,11 +96,13 @@ def load_settings() -> Settings:
         providers[pname] = ProviderConfig(name=pname, api_key=api_key)
 
     # Parse waterfall order
-    order_str = os.getenv("WATERFALL_ORDER", "apollo,icypeas,findymail,contactout")
+    order_str = os.getenv("WATERFALL_ORDER", "apollo,icypeas,findymail,datagma")
     waterfall_order = [ProviderName(p.strip()) for p in order_str.split(",") if p.strip()]
 
     cache_ttl = int(os.getenv("CACHE_TTL_DAYS", "30"))
     db_path = os.getenv("DB_PATH", "clay_dupe.db")
+
+    anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "")
 
     return Settings(
         providers=providers,
@@ -61,7 +110,20 @@ def load_settings() -> Settings:
         cache_ttl_days=cache_ttl,
         db_path=db_path,
         icp_presets=ICP_PRESETS,
+        anthropic_api_key=anthropic_api_key,
     )
+
+def persist_settings(updates: dict[str, str | None]) -> None:
+    """Write settings to .env file and reload environment.
+
+    Skips keys whose value is None.  After writing, reloads the
+    environment so that ``os.getenv()`` reflects updated values.
+    """
+    for key, value in updates.items():
+        if value is not None:
+            set_key(_ENV_PATH, key, value)
+    load_dotenv(_ENV_PATH, override=True)
+
 
 # Hardcoded ICP presets
 ICP_PRESETS = {
@@ -85,3 +147,68 @@ ICP_PRESETS = {
         keywords=["precision machining", "CNC", "injection molding", "OEM", "contract manufacturer", "fabrication"],
     ),
 }
+
+
+# ---------------------------------------------------------------------------
+# Salesforce config
+# ---------------------------------------------------------------------------
+
+class SalesforceConfig(BaseModel):
+    """Salesforce credentials loaded from environment variables."""
+    username: str = ""
+    password: str = ""
+    security_token: str = ""
+
+    def is_configured(self) -> bool:
+        """Return True only if all three credentials are non-empty."""
+        return bool(self.username and self.password and self.security_token)
+
+
+def load_salesforce_config() -> SalesforceConfig:
+    """Load Salesforce credentials from environment variables."""
+    return SalesforceConfig(
+        username=os.environ.get("SALESFORCE_USERNAME", ""),
+        password=os.environ.get("SALESFORCE_PASSWORD", ""),
+        security_token=os.environ.get("SALESFORCE_SECURITY_TOKEN", ""),
+    )
+
+
+def load_all_icp_profiles(db: Database) -> dict[str, ICPPreset]:
+    """Load built-in ICP presets merged with custom profiles from the DB.
+
+    Custom profiles override built-in ones if they share the same name key.
+    Returns a combined dict[profile_key, ICPPreset].
+    """
+    from data.sync import run_sync
+
+    combined = dict(ICP_PRESETS)
+
+    try:
+        custom_rows = run_sync(db.get_icp_profiles())
+    except Exception:
+        return combined
+
+    for row in custom_rows:
+        config = row.get("config", {})
+        if isinstance(config, str):
+            config = json.loads(config)
+        name_key = row.get("name", "").replace(" ", "_").lower()
+        if not name_key:
+            continue
+        try:
+            preset = ICPPreset(
+                name=name_key,
+                display_name=row.get("name", name_key),
+                industries=config.get("industries", []),
+                keywords=config.get("keywords", []),
+                employee_min=config.get("employee_min", 10),
+                employee_max=config.get("employee_max", 100),
+                ebitda_min=config.get("ebitda_min"),
+                ebitda_max=config.get("ebitda_max"),
+                countries=config.get("countries", ["US", "UK", "CA"]),
+            )
+            combined[name_key] = preset
+        except Exception:
+            continue
+
+    return combined

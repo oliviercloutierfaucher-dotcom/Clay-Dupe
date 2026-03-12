@@ -12,6 +12,7 @@ from config.settings import ProviderName, ICP_PRESETS, ICPPreset
 from data.models import Company, Person, Campaign, EnrichmentType, CampaignStatus
 from providers.apollo import ApolloProvider
 
+from data.sync import run_sync
 from ui.app import get_database, get_settings
 
 # ---------------------------------------------------------------------------
@@ -23,7 +24,7 @@ _EXECUTOR = ThreadPoolExecutor(max_workers=2)
 
 def _run_async(coro):
     """Run an async coroutine from synchronous Streamlit code."""
-    return asyncio.run(coro)
+    return run_sync(coro)
 
 
 def _get_apollo() -> ApolloProvider | None:
@@ -49,69 +50,72 @@ EMPLOYEE_RANGES = [
 # Page
 # ---------------------------------------------------------------------------
 
-st.header("Company & People Search")
+st.header("Find Leads")
 
-# ---- ICP preset selector ---------------------------------------------------
+# ---- Search Filters expander -----------------------------------------------
 
-st.subheader("ICP Presets")
-preset_names = list(ICP_PRESETS.keys())
-preset_display = {k: v.display_name for k, v in ICP_PRESETS.items()}
+with st.expander("Search Filters", expanded=True):
 
-selected_preset = st.radio(
-    "Select an ICP preset to auto-fill filters",
-    options=["custom"] + preset_names,
-    format_func=lambda x: "Custom" if x == "custom" else preset_display.get(x, x),
-    horizontal=True,
-)
+    # ---- ICP preset selector ------------------------------------------------
 
-# Resolve preset values
-preset: ICPPreset | None = ICP_PRESETS.get(selected_preset) if selected_preset != "custom" else None
+    preset_names = list(ICP_PRESETS.keys())
+    preset_display = {k: v.display_name for k, v in ICP_PRESETS.items()}
 
-st.divider()
-
-# ---- Filter inputs ----------------------------------------------------------
-
-st.subheader("Search Filters")
-
-filter_cols = st.columns(2)
-
-with filter_cols[0]:
-    default_industries = ", ".join(preset.industries) if preset else ""
-    industry_input = st.text_input(
-        "Industries (comma-separated)",
-        value=default_industries,
-        help="e.g. aerospace, defense, aviation",
+    selected_preset = st.radio(
+        "ICP Preset",
+        options=["custom"] + preset_names,
+        format_func=lambda x: "Custom" if x == "custom" else preset_display.get(x, x),
+        horizontal=True,
     )
 
-    default_keywords = ", ".join(preset.keywords) if preset else ""
-    keywords_input = st.text_input(
-        "Keywords (comma-separated)",
-        value=default_keywords,
-        help="e.g. MRO, avionics, mil-spec",
-    )
+    # Resolve preset values
+    preset: ICPPreset | None = ICP_PRESETS.get(selected_preset) if selected_preset != "custom" else None
 
-with filter_cols[1]:
-    default_min = preset.employee_min if preset else 10
-    default_max = preset.employee_max if preset else 500
-    emp_range = st.slider(
-        "Employee Range",
-        min_value=1,
-        max_value=50000,
-        value=(default_min, default_max),
-        step=10,
-    )
+    # ---- Filter inputs ------------------------------------------------------
 
-    default_countries = preset.countries if preset else ["US"]
-    countries = st.multiselect(
-        "Countries",
-        options=COUNTRIES,
-        default=[c for c in default_countries if c in COUNTRIES],
-    )
+    filter_cols = st.columns(2)
 
-# ---- Search type selector ---------------------------------------------------
+    with filter_cols[0]:
+        default_industries = ", ".join(preset.industries) if preset else ""
+        industry_input = st.text_input(
+            "Industries (comma-separated)",
+            value=default_industries,
+            help="e.g. aerospace, defense, aviation",
+        )
 
-st.divider()
-search_type = st.radio("Search type", ["Companies", "People"], horizontal=True)
+        default_keywords = ", ".join(preset.keywords) if preset else ""
+        keywords_input = st.text_input(
+            "Keywords (comma-separated)",
+            value=default_keywords,
+            help="e.g. MRO, avionics, mil-spec",
+        )
+
+    with filter_cols[1]:
+        default_min = preset.employee_min if preset else 10
+        default_max = preset.employee_max if preset else 500
+        emp_range = st.slider(
+            "Employee Range",
+            min_value=1,
+            max_value=50000,
+            value=(default_min, default_max),
+            step=10,
+        )
+
+        default_countries = preset.countries if preset else ["US"]
+        countries = st.multiselect(
+            "Countries",
+            options=COUNTRIES,
+            default=[c for c in default_countries if c in COUNTRIES],
+        )
+
+# ---- Search type + button inline -------------------------------------------
+
+search_row = st.columns([2, 2, 4])
+with search_row[0]:
+    search_type = st.radio("Search type", ["Companies", "People"], horizontal=True)
+with search_row[1]:
+    st.markdown("")
+    search_btn = st.button("Search", type="primary", icon=":material/search:")
 
 # ---- Build Apollo payload ---------------------------------------------------
 
@@ -126,7 +130,7 @@ def _build_emp_ranges(min_val: int, max_val: int) -> list[str]:
 
 # ---- Execute search ---------------------------------------------------------
 
-if st.button("Search", type="primary", icon=":material/search:"):
+if search_btn:
     apollo = _get_apollo()
     if apollo is None:
         st.error("Apollo API key is not configured. Go to **Settings** to add it.")
@@ -192,7 +196,6 @@ if st.button("Search", type="primary", icon=":material/search:"):
 # ---- Display results --------------------------------------------------------
 
 if "search_results_df" in st.session_state:
-    st.divider()
     st.subheader("Search Results")
 
     df = st.session_state["search_results_df"]
@@ -200,6 +203,7 @@ if "search_results_df" in st.session_state:
     event = st.dataframe(
         df,
         use_container_width=True,
+        height=400,
         hide_index=True,
         on_select="rerun",
         selection_mode="multi-row",
@@ -207,23 +211,56 @@ if "search_results_df" in st.session_state:
 
     selected_rows = event.selection.rows if event.selection else []
 
-    # ---- Enrich Selected button ---------------------------------------------
+    # ---- Save companies to database ------------------------------------------
 
-    st.divider()
-    enrich_cols = st.columns([3, 1])
+    if "search_results_companies" in st.session_state:
+        save_cols = st.columns([3, 2])
+        with save_cols[1]:
+            st.markdown("")  # vertical alignment
+            save_db_btn = st.button(
+                f"Save Selected to Database ({len(selected_rows)})",
+                type="secondary",
+                icon=":material/save:",
+                disabled=len(selected_rows) == 0,
+                key="save_companies_db",
+            )
 
-    with enrich_cols[0]:
+        if save_db_btn and selected_rows:
+            db = get_database()
+            companies = st.session_state["search_results_companies"]
+            saved_count = 0
+            merged_count = 0
+            for idx in selected_rows:
+                if idx < len(companies):
+                    c = companies[idx]
+                    # Set source_type for Apollo-sourced companies
+                    c.source_type = "apollo_search"
+                    existing = run_sync(db.get_company_by_domain(c.domain)) if c.domain else None
+                    run_sync(db.upsert_company(c))
+                    if existing:
+                        merged_count += 1
+                    else:
+                        saved_count += 1
+            st.success(
+                f"Saved **{saved_count}** companies to database"
+                + (f", merged **{merged_count}** existing." if merged_count else ".")
+            )
+
+    # ---- Campaign creation bar (compact) ------------------------------------
+
+    create_cols = st.columns([3, 2])
+
+    with create_cols[0]:
         campaign_name = st.text_input(
             "Campaign name",
             value=f"Search - {search_type}",
             key="search_campaign_name",
         )
 
-    with enrich_cols[1]:
-        st.markdown("")  # spacer
-        st.markdown("")
+    with create_cols[1]:
+        st.markdown("")  # vertical alignment
         enrich_btn = st.button(
-            f"Enrich Selected ({len(selected_rows)} rows)",
+            f"Enrich Selected ({len(selected_rows)})",
             type="primary",
             icon=":material/bolt:",
             disabled=len(selected_rows) == 0,
@@ -241,7 +278,7 @@ if "search_results_df" in st.session_state:
             status=CampaignStatus.CREATED,
             total_rows=len(selected_rows),
         )
-        campaign = db.create_campaign(campaign)
+        campaign = run_sync(db.create_campaign(campaign))
 
         # Store selected people/companies as campaign rows
         row_dicts = []
@@ -268,7 +305,7 @@ if "search_results_df" in st.session_state:
                     })
 
         if row_dicts:
-            db.create_campaign_rows(campaign.id, row_dicts)
+            run_sync(db.create_campaign_rows(campaign.id, row_dicts))
             st.success(
                 f"Campaign **{campaign.name}** created with {len(row_dicts)} rows.  "
                 f"Go to **Enrich** to configure and run it."

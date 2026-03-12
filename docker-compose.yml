@@ -1,0 +1,11 @@
+services:
+  clay-dupe:
+    build: .
+    container_name: clay-dupe
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/data
+    env_file:
+      - .env
+    restart: unless-stopped

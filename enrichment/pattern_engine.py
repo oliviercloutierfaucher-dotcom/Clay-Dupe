@@ -434,9 +434,10 @@ class PatternEngine:
             7. Return email if found, ``None`` otherwise.
         """
         # Step 1: Retrieve known patterns from DB
-        domain_patterns = self.db.get_domain_patterns(domain)
+        domain_patterns = await self.db.get_domain_patterns(domain)
         if not domain_patterns:
-            return None
+            # No known patterns — try fallback using global frequency
+            return await self._try_fallback(first_name, last_name, domain)
 
         # Step 2: Build counts and compute confidence
         pattern_counts: dict[str, int] = {}
@@ -465,18 +466,18 @@ class PatternEngine:
             return None
 
         # Step 4: Check catch-all status
-        is_catch_all = self.db.get_catch_all_status(domain)
+        is_catch_all = await self.db.get_catch_all_status(domain)
         if is_catch_all is None:
             # Fall back to verifier detection
-            is_catch_all = self.verifier.detect_catch_all(domain)
+            is_catch_all = await self.verifier.detect_catch_all(domain)
             if is_catch_all is not None:
-                self.db.set_catch_all_status(domain, is_catch_all)
+                await self.db.set_catch_all_status(domain, is_catch_all)
 
         # Step 5 & 6: Verify or return based on catch-all status
         if not is_catch_all:
             # Not a catch-all domain -- SMTP verify top candidates
             for candidate in candidates:
-                verification = self.verifier.verify(candidate["email"])
+                verification = await self.verifier.verify(candidate["email"])
                 if verification.get("valid"):
                     return candidate["email"]
             # None of the candidates verified
@@ -489,7 +490,43 @@ class PatternEngine:
             # Confidence too low for unverified guess on catch-all
             return None
 
-    def learn_pattern(
+    async def _try_fallback(
+        self,
+        first_name: str,
+        last_name: str,
+        domain: str,
+    ) -> Optional[str]:
+        """Fallback when no domain-specific patterns exist.
+
+        Uses global frequency distribution to generate guesses.
+        Only proceeds if the best candidate confidence >= 0.40.
+        For non-catch-all domains, verifies via SMTP before returning.
+        """
+        candidates = generate_fallback_candidates(first_name, last_name, domain)
+        if not candidates or candidates[0]["confidence"] < 0.40:
+            return None
+
+        # Check catch-all status
+        is_catch_all = await self.db.get_catch_all_status(domain)
+        if is_catch_all is None:
+            is_catch_all = await self.verifier.detect_catch_all(domain)
+            if is_catch_all is not None:
+                await self.db.set_catch_all_status(domain, is_catch_all)
+
+        if not is_catch_all:
+            # Not catch-all — SMTP verify the best candidate
+            for candidate in candidates:
+                if candidate["confidence"] < 0.40:
+                    break
+                verification = await self.verifier.verify(candidate["email"])
+                if verification.get("valid"):
+                    return candidate["email"]
+            return None
+
+        # Catch-all — can't verify, return None (confidence too low for unverified guess)
+        return None
+
+    async def learn_pattern(
         self,
         email: str,
         first_name: str,
@@ -509,4 +546,4 @@ class PatternEngine:
         # as a starting point; the DB will track sample_count for Bayesian
         # confidence on subsequent lookups.
         base_confidence = PATTERN_FREQUENCY.get(pattern, 0.01)
-        self.db.record_pattern(domain, pattern, email, base_confidence)
+        await self.db.record_pattern(domain, pattern, email, base_confidence)

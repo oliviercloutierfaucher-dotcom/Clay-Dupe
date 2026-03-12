@@ -1,13 +1,17 @@
 """Findymail provider — email finder & verifier."""
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 import httpx
 
 from providers.base import BaseProvider, ProviderResponse
+from providers.validators import validate_domain, validate_email, validate_name
 from config.settings import ProviderName
 from data.models import Company, Person
+
+logger = logging.getLogger(__name__)
 
 
 class FindymailProvider(BaseProvider):
@@ -34,6 +38,9 @@ class FindymailProvider(BaseProvider):
         self, first_name: str, last_name: str, domain: str
     ) -> ProviderResponse:
         """POST /api/search/name — find email by full name + domain."""
+        first_name = validate_name("Findymail", first_name, "first_name")
+        last_name = validate_name("Findymail", last_name, "last_name")
+        domain = validate_domain("Findymail", domain)
         url = f"{self.base_url}/search/name"
         payload = {
             "name": f"{first_name} {last_name}",
@@ -88,6 +95,7 @@ class FindymailProvider(BaseProvider):
     # ------------------------------------------------------------------
     async def verify_email(self, email: str) -> ProviderResponse:
         """POST /api/verify — verify a single email address."""
+        email = validate_email("Findymail", email)
         url = f"{self.base_url}/verify"
         payload = {"email": email}
 
@@ -123,14 +131,9 @@ class FindymailProvider(BaseProvider):
     async def check_credits(self) -> Optional[dict]:
         """GET /api/credits — return remaining credit balance."""
         url = f"{self.base_url}/credits"
-
-        try:
-            data, _ = await self._request(
-                "GET", url, headers=self._headers(),
-            )
-        except httpx.HTTPStatusError as exc:
-            raise exc
-
+        data, _ = await self._request(
+            "GET", url, headers=self._headers(),
+        )
         return data
 
     # ------------------------------------------------------------------
@@ -141,7 +144,16 @@ class FindymailProvider(BaseProvider):
         try:
             await self.check_credits()
             return True
-        except Exception:
+        except httpx.HTTPStatusError as exc:
+            logger.warning(
+                "Findymail health check failed: HTTP %d", exc.response.status_code,
+            )
+            return False
+        except httpx.TimeoutException:
+            logger.warning("Findymail health check failed: timeout")
+            return False
+        except OSError as exc:
+            logger.warning("Findymail health check failed: connection error: %s", exc)
             return False
 
     # ------------------------------------------------------------------

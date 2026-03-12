@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Optional, Union
 
@@ -41,12 +42,16 @@ COLUMN_ALIASES: dict[str, list[str]] = {
         "company_name", "account name", "business name",
     ],
     "company_domain": [
-        "domain", "company domain", "website", "company website",
-        "url", "company_domain", "web", "company url",
+        "domain", "company domain", "company website",
+        "company_domain", "company url",
     ],
     "linkedin_url": [
         "linkedin", "linkedin url", "linkedin profile", "linkedin_url",
         "li url", "profile url", "linkedin link",
+        "company_linkedin", "company linkedin",
+    ],
+    "website_url": [
+        "website", "url", "web", "company_url", "homepage",
     ],
     "phone": [
         "phone", "phone number", "telephone", "tel", "direct phone",
@@ -67,6 +72,23 @@ COLUMN_ALIASES: dict[str, list[str]] = {
     "employee_count": [
         "employees", "employee count", "company size", "headcount",
         "num employees", "number of employees", "size",
+        "num_employees", "total_employees", "total employees",
+    ],
+    "revenue_usd": [
+        "revenue", "annual_revenue", "annual revenue", "annual_revenue_usd",
+        "annual revenue usd", "yearly_revenue", "yearly revenue", "rev",
+        "revenue_usd", "revenue usd",
+    ],
+    "ebitda_usd": [
+        "ebitda", "annual_ebitda", "annual ebitda", "ebitda_usd", "ebitda usd",
+    ],
+    "founded_year": [
+        "founded", "year_founded", "year founded", "founding_year",
+        "founding year", "established", "founded_year",
+    ],
+    "description": [
+        "about", "company_description", "company description",
+        "overview", "summary", "description",
     ],
     "seniority": [
         "seniority", "seniority level", "level",
@@ -294,20 +316,20 @@ def read_input_file(
             engine="python",
         )
 
-    # --- Clean up ----------------------------------------------------------
+    # --- Clean up (single pass per column) -----------------------------------
 
     # Strip whitespace from column names
     df.columns = [str(c).strip() for c in df.columns]
 
-    # Strip whitespace from all cells
-    df = df.apply(lambda col: col.map(lambda x: x.strip() if isinstance(x, str) else x))
-
-    # Replace null-like strings with NaN
-    df = df.apply(
-        lambda col: col.map(
-            lambda x: pd.NA if isinstance(x, str) and x.lower() in _NULL_STRINGS else x
-        )
-    )
+    # Strip whitespace and replace null-like strings in one pass per column
+    for col in df.columns:
+        series = df[col]
+        if series.dtype == object:
+            # .str accessor handles NaN gracefully (returns NaN)
+            stripped = series.str.strip()
+            df[col] = stripped.where(
+                ~stripped.str.lower().isin(_NULL_STRINGS), other=pd.NA,
+            )
 
     # Drop fully empty rows
     df = df.dropna(how="all")
@@ -316,6 +338,39 @@ def read_input_file(
     df = df.reset_index(drop=True)
 
     return df
+
+
+# ---------------------------------------------------------------------------
+# apply_mapping
+# ---------------------------------------------------------------------------
+
+def deduplicate_rows(
+    records: list[dict],
+    key_fields: tuple[str, ...] = ("first_name", "last_name", "company_domain"),
+) -> tuple[list[dict], int]:
+    """Remove duplicate rows based on key fields.
+
+    Returns (deduplicated_records, duplicate_count).
+    Keys are case-insensitive.
+    """
+    seen: set[tuple[str, ...]] = set()
+    unique: list[dict] = []
+    dupes = 0
+    for record in records:
+        key = tuple(
+            (record.get(f) or "").strip().lower()
+            for f in key_fields
+        )
+        # Skip if all key fields are empty (would match all empty rows)
+        if all(k == "" for k in key):
+            unique.append(record)
+            continue
+        if key in seen:
+            dupes += 1
+            continue
+        seen.add(key)
+        unique.append(record)
+    return unique, dupes
 
 
 # ---------------------------------------------------------------------------
@@ -357,6 +412,125 @@ def apply_mapping(df: pd.DataFrame, mapping: dict[str, str]) -> list[dict[str, s
             records.append(canonical_row)
 
     return records
+
+
+# ---------------------------------------------------------------------------
+# map_to_companies
+# ---------------------------------------------------------------------------
+
+# Mapping from canonical CSV fields to Company model fields
+_CSV_TO_COMPANY_FIELD: dict[str, str] = {
+    "company_name": "name",
+    "company_domain": "domain",
+    "industry": "industry",
+    "employee_count": "employee_count",
+    "country": "country",
+    "city": "city",
+    "state": "state",
+    "revenue_usd": "revenue_usd",
+    "ebitda_usd": "ebitda_usd",
+    "founded_year": "founded_year",
+    "description": "description",
+    "linkedin_url": "linkedin_url",
+    "website_url": "website_url",
+    "phone": "phone",
+}
+
+
+def _safe_int(value: str | None) -> int | None:
+    """Convert a string to int, returning None on failure."""
+    if value is None:
+        return None
+    try:
+        return int(float(value))
+    except (ValueError, TypeError):
+        return None
+
+
+def _safe_decimal(value: str | None) -> Decimal | None:
+    """Convert a string to Decimal, returning None on failure."""
+    if value is None:
+        return None
+    try:
+        return Decimal(value)
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+
+
+def map_to_companies(
+    df: pd.DataFrame,
+    mapping: dict[str, str],
+    source_type: str = "csv_import",
+) -> list[Company]:
+    """Map a DataFrame to Company objects using the given column mapping.
+
+    Parameters
+    ----------
+    df : DataFrame
+        Raw input data.
+    mapping : dict
+        ``{input_column_name: canonical_field_name}`` from ColumnMapper.
+    source_type : str
+        Source type to set on each company (e.g. "csv_import", "apollo_search", "manual").
+
+    Returns
+    -------
+    list[Company]
+        Deduplicated by domain. First occurrence wins, subsequent rows merge
+        non-None fields into the first.
+    """
+    records = apply_mapping(df, mapping)
+
+    # Build Company objects
+    seen_domains: dict[str, int] = {}  # normalized domain -> index in companies list
+    companies: list[Company] = []
+
+    for record in records:
+        # Map canonical CSV fields to Company model fields
+        company_kwargs: dict[str, Any] = {"source_type": source_type}
+
+        for csv_field, model_field in _CSV_TO_COMPANY_FIELD.items():
+            value = record.get(csv_field)
+            if value is None:
+                continue
+
+            # Type conversions for specific fields
+            if model_field == "employee_count":
+                value = _safe_int(value)
+            elif model_field in ("revenue_usd", "ebitda_usd"):
+                value = _safe_decimal(value)
+            elif model_field == "founded_year":
+                value = _safe_int(value)
+
+            if value is not None:
+                company_kwargs[model_field] = value
+
+        # Ensure we have at least a name
+        if "name" not in company_kwargs:
+            continue
+
+        company = Company(**company_kwargs)
+
+        # Deduplicate by normalized domain
+        if company.domain:
+            if company.domain in seen_domains:
+                # Merge: update existing company with non-None fields from new one
+                idx = seen_domains[company.domain]
+                existing = companies[idx]
+                for field_name in Company.model_fields:
+                    if field_name in ("id", "created_at", "updated_at", "source_type"):
+                        continue
+                    new_val = getattr(company, field_name, None)
+                    existing_val = getattr(existing, field_name, None)
+                    if new_val is not None and existing_val is None:
+                        setattr(existing, field_name, new_val)
+                continue
+            else:
+                seen_domains[company.domain] = len(companies)
+
+        companies.append(company)
+
+    return companies
 
 
 # ---------------------------------------------------------------------------

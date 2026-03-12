@@ -91,6 +91,12 @@ class Company(BaseModel):
     phone: Optional[str] = None
     source_provider: Optional[ProviderName] = None
     apollo_id: Optional[str] = None
+    source_type: Optional[str] = None  # "apollo_search", "csv_import", "manual"
+    icp_score: Optional[int] = None    # 0-100
+    status: str = "new"                # "new", "contacted", "skipped"
+    sf_account_id: Optional[str] = None
+    sf_status: Optional[str] = None      # "in_sf" or None
+    sf_instance_url: Optional[str] = None
     enriched_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
@@ -212,7 +218,7 @@ class EnrichmentResult(BaseModel):
     source_provider: ProviderName
     result_data: dict = Field(default_factory=dict)
     found: bool = False
-    confidence_score: Optional[float] = Field(default=None, ge=0, le=100)
+    confidence_score: float = Field(default=0.0, ge=0, le=100)
     verification_status: VerificationStatus = VerificationStatus.UNKNOWN
     cost_credits: float = 0.0
     cost_usd: Optional[float] = None
@@ -285,6 +291,52 @@ class CacheEntry(BaseModel):
     created_at: datetime = Field(default_factory=_utcnow)
     expires_at: Optional[datetime] = None
     hit_count: int = 0
+
+
+# ---------------------------------------------------------------------------
+# EmailPattern
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# EmailTemplate
+# ---------------------------------------------------------------------------
+
+class EmailTemplate(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str = Field(default_factory=_new_uuid)
+    name: str
+    description: Optional[str] = None
+    system_prompt: str
+    user_prompt_template: str
+    sequence_step: int = 1  # 1=Intro, 2=Follow-up, 3=Breakup
+    is_default: bool = False
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
+
+
+# ---------------------------------------------------------------------------
+# GeneratedEmail
+# ---------------------------------------------------------------------------
+
+class GeneratedEmail(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str = Field(default_factory=_new_uuid)
+    campaign_id: str
+    template_id: Optional[str] = None
+    person_id: str
+    company_id: Optional[str] = None
+    sequence_step: int = 1
+    subject: Optional[str] = None
+    body: Optional[str] = None
+    status: str = "draft"  # draft, approved, rejected, failed
+    user_note: Optional[str] = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0.0
+    generated_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
 
 
 # ---------------------------------------------------------------------------

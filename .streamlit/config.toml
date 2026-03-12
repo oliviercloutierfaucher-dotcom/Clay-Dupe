@@ -1,0 +1,22 @@
+[server]
+headless = true
+enableCORS = true
+enableXsrfProtection = true
+maxUploadSize = 50
+fileWatcherType = "none"
+runOnSave = false
+enableWebsocketCompression = true
+
+[browser]
+gatherUsageStats = false
+
+[client]
+showErrorDetails = "none"
+toolbarMode = "minimal"
+
+[runner]
+fastReruns = true
+magicEnabled = false
+
+[logger]
+level = "info"

@@ -109,12 +109,12 @@ class TestComputeConfidence:
     def test_single_observation(self):
         result = compute_confidence({"{first}.{last}": 1})
         conf = result["{first}.{last}"]
-        assert 0.55 < conf < 0.65  # ~0.59 expected
+        assert 0.70 < conf < 0.80  # 1-(1/2)^2 = 0.75
 
     def test_two_observations(self):
         result = compute_confidence({"{first}.{last}": 2})
         conf = result["{first}.{last}"]
-        assert 0.78 < conf < 0.86  # ~0.82 expected
+        assert 0.85 < conf < 0.92  # 1-(1/3)^2 ≈ 0.889
 
     def test_three_observations(self):
         result = compute_confidence({"{first}.{last}": 3})
