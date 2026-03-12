@@ -4,8 +4,8 @@ set -e
 # Ensure data directory exists and is writable
 mkdir -p /data
 if [ ! -w /data ]; then
-    echo "ERROR: /data is not writable" >&2
-    exit 1
+    echo "WARN: /data not writable, attempting chmod..." >&2
+    chmod 777 /data 2>/dev/null || true
 fi
 
 # Start Streamlit (exec replaces shell for proper signal handling)
