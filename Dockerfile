@@ -32,10 +32,8 @@ ENV DB_PATH=/data/clay_dupe.db
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
-# Run as non-root user for container security
-RUN groupadd -r appuser && useradd -r -g appuser -d /app appuser
-RUN chown -R appuser:appuser /app /data
-USER appuser
+# Note: Running as root for Railway volume compatibility
+# Railway mounts volumes as root-owned after build
 
 EXPOSE 8501
 
