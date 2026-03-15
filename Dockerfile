@@ -19,8 +19,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Install the package in editable mode so imports resolve from /app
-RUN pip install --no-cache-dir -e .
+# Add /app to Python path so all packages are importable
+ENV PYTHONPATH=/app
 
 # Create data directory for SQLite persistence
 RUN mkdir -p /data
