@@ -11,7 +11,7 @@ enableWebsocketCompression = true
 gatherUsageStats = false
 
 [client]
-showErrorDetails = "none"
+showErrorDetails = "full"
 toolbarMode = "minimal"
 
 [runner]

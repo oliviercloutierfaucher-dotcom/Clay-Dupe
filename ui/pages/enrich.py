@@ -47,7 +47,7 @@ def _run_async(coro):
     return asyncio.run(coro)
 
 
-def _run_enrichment_bg(campaign_id: str, db_path: str, settings) -> None:
+def _run_enrichment_bg(campaign_id: str, db_path: str, settings, force_enrich_domains: set[str] | None = None) -> None:
     """Run enrichment in a background daemon thread.
 
     Creates its own :class:`Database` instance and ``asyncio`` event loop
@@ -75,6 +75,20 @@ def _run_enrichment_bg(campaign_id: str, db_path: str, settings) -> None:
 
         # Separate Database instance for this thread
         bg_db = Database(db_path=db_path)
+
+        # Salesforce dedup gate (optional -- only if SF credentials configured)
+        sf_client = None
+        try:
+            from config.settings import load_salesforce_config
+            sf_cfg = load_salesforce_config()
+            if sf_cfg and sf_cfg.username and sf_cfg.password and sf_cfg.security_token:
+                from providers.salesforce import SalesforceClient
+                sf_client = SalesforceClient(sf_cfg.username, sf_cfg.password, sf_cfg.security_token)
+                if not sf_client.health_check():
+                    logger.warning("Salesforce health check failed; skipping SF dedup gate")
+                    sf_client = None
+        except Exception:
+            logger.warning("Salesforce client init failed; skipping SF dedup gate")
 
         provider_classes = {
             ProviderName.APOLLO: ApolloProvider,
@@ -123,7 +137,12 @@ def _run_enrichment_bg(campaign_id: str, db_path: str, settings) -> None:
             cost_tracker=cost_tracker,
             waterfall_order=settings.waterfall_order,
             verifier=verifier,
+            sf_client=sf_client,
         )
+
+        # Apply force-enrich overrides from companies page
+        if force_enrich_domains:
+            orchestrator._force_enrich_domains = force_enrich_domains
 
         try:
             # Get pending rows for this campaign
@@ -218,9 +237,10 @@ if campaign_id and (is_running or is_terminal):
     # ---- Start enrichment in background thread (once) ---------------------
     thread_key = f"enrichment_thread_{campaign_id}"
     if thread_key not in st.session_state:
+        force_domains = st.session_state.get("force_enrich_domains") or set()
         thread = threading.Thread(
             target=_run_enrichment_bg,
-            args=(campaign_id, db.db_path, settings),
+            args=(campaign_id, db.db_path, settings, force_domains),
             daemon=True,
         )
         thread.start()
