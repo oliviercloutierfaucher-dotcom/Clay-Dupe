@@ -22,6 +22,9 @@ COPY . .
 # Add /app to Python path so all packages are importable
 ENV PYTHONPATH=/app
 
+# Ensure .env file exists for settings persistence
+RUN touch /app/.env
+
 # Create data directory for SQLite persistence
 RUN mkdir -p /data
 
