@@ -56,9 +56,9 @@ class CacheManager:
         """Retrieve a cached response, or ``None`` if missing / expired."""
         try:
             return await self.db.cache_get(provider, data_type, query_input)
-        except Exception:
-            logger.exception(
-                "Cache GET failed for provider=%s data_type=%s", provider, data_type,
+        except (OSError, ValueError, KeyError) as exc:
+            logger.warning(
+                "Cache GET failed for provider=%s data_type=%s: %s", provider, data_type, exc,
             )
             return None
 
@@ -84,9 +84,9 @@ class CacheManager:
                 found=found,
                 ttl_days=ttl_days,
             )
-        except Exception:
-            logger.exception(
-                "Cache SET failed for provider=%s data_type=%s", provider, data_type,
+        except (OSError, ValueError) as exc:
+            logger.warning(
+                "Cache SET failed for provider=%s data_type=%s: %s", provider, data_type, exc,
             )
 
     # ------------------------------------------------------------------
@@ -108,11 +108,10 @@ class CacheManager:
                     (cache_key,),
                 )
                 return cursor.rowcount > 0
-        except Exception:
-            logger.exception(
-                "Cache INVALIDATE failed for provider=%s data_type=%s",
-                provider,
-                data_type,
+        except OSError as exc:
+            logger.warning(
+                "Cache INVALIDATE failed for provider=%s data_type=%s: %s",
+                provider, data_type, exc,
             )
             return False
 
@@ -137,9 +136,9 @@ class CacheManager:
                         "Invalidated %d cache entries for domain=%s", count, domain,
                     )
                 return count
-        except Exception:
-            logger.exception(
-                "Cache INVALIDATE_DOMAIN failed for domain=%s", domain,
+        except OSError as exc:
+            logger.warning(
+                "Cache INVALIDATE_DOMAIN failed for domain=%s: %s", domain, exc,
             )
             return 0
 
@@ -154,8 +153,8 @@ class CacheManager:
             if count:
                 logger.info("Purged %d expired cache entries", count)
             return count
-        except Exception:
-            logger.exception("Cache PURGE_EXPIRED failed")
+        except OSError as exc:
+            logger.warning("Cache PURGE_EXPIRED failed: %s", exc)
             return 0
 
     # ------------------------------------------------------------------
@@ -222,8 +221,8 @@ class CacheManager:
                 "oldest_entry": oldest,
                 "newest_entry": newest,
             }
-        except Exception:
-            logger.exception("Cache GET_STATS failed")
+        except OSError as exc:
+            logger.warning("Cache GET_STATS failed: %s", exc)
             return {
                 "total_entries": 0,
                 "active_entries": 0,

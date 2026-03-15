@@ -13,7 +13,7 @@ from data.models import Company, Person, Campaign, EnrichmentType, CampaignStatu
 from providers.apollo import ApolloProvider
 
 from data.sync import run_sync
-from ui.app import get_database, get_settings
+from ui.shared import get_database, get_settings
 
 # ---------------------------------------------------------------------------
 # Helpers

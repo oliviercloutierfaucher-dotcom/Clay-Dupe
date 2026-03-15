@@ -53,9 +53,11 @@ def calculate_confidence(
     score += VERIFICATION_SCORES.get(verification_status, 9)
 
     # 3. Cross-provider agreement (0-25)
-    if cross_provider_count >= 3:
+    MULTI_PROVIDER_THRESHOLD = 3   # 3+ providers = highest agreement score
+    DUAL_PROVIDER_THRESHOLD = 2    # 2 providers = strong agreement
+    if cross_provider_count >= MULTI_PROVIDER_THRESHOLD:
         score += 25
-    elif cross_provider_count == 2:
+    elif cross_provider_count == DUAL_PROVIDER_THRESHOLD:
         score += 20
     elif cross_provider_count == 1:
         # Single provider — score depends on which one

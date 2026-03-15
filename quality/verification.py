@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import re
 import random
 import smtplib
 import string
@@ -44,10 +43,9 @@ class SMTPRateLimiter:
 class EmailVerifier:
     """4-stage email verification: syntax -> MX -> catch-all -> SMTP."""
 
-    # RFC 5322 simplified email regex
-    EMAIL_REGEX = re.compile(
-        r'^[a-zA-Z0-9.!#$%&\'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$'
-    )
+    # Canonical regex from providers.validators
+    from providers.validators import _EMAIL_RE
+    EMAIL_REGEX = _EMAIL_RE
 
     def __init__(self, sender_domain: str = "verify.example.com"):
         self.sender_domain = sender_domain

@@ -59,7 +59,7 @@ class BaseProvider(ABC):
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
-            self._client = get_shared_client()
+            self._client = await get_shared_client()
         return self._client
 
     @retry(

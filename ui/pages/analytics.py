@@ -10,7 +10,7 @@ from config.settings import ProviderName
 from cost.tracker import CostTracker
 from data.sync import run_sync
 
-from ui.app import get_database, get_settings
+from ui.shared import get_database, get_settings
 
 # ---------------------------------------------------------------------------
 # Page

@@ -17,7 +17,7 @@ import sqlite3
 import sys
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -224,7 +224,7 @@ class Database:
         query_hash = hashlib.sha256(
             json.dumps(query_input, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
-        expires_at = (datetime.utcnow() + timedelta(days=ttl_days)).isoformat()
+        expires_at = (datetime.now(timezone.utc) + timedelta(days=ttl_days)).isoformat()
         prov = provider if isinstance(provider, str) else provider.value
         etype = enrichment_type if isinstance(enrichment_type, str) else enrichment_type.value
 
@@ -297,7 +297,7 @@ class Database:
 
     async def upsert_company(self, company: Company) -> Company:
         """Upsert a company by domain (select-then-insert/update for partial index compat)."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         industry_tags_json = json.dumps(company.industry_tags)
         revenue = float(company.revenue_usd) if company.revenue_usd is not None else None
         ebitda = float(company.ebitda_usd) if company.ebitda_usd is not None else None
@@ -406,7 +406,7 @@ class Database:
     ) -> None:
         """Update SF fields for the company matching the given domain."""
         domain = domain.strip().lower()
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         async with self._connect() as conn:
             await conn.execute(
                 """UPDATE companies SET
@@ -494,7 +494,7 @@ class Database:
         self, profile_id: str, name: str, config: dict, is_default: bool = False,
     ) -> None:
         """Insert or update an ICP profile."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         config_json = json.dumps(config)
         async with self._connect() as conn:
             await conn.execute(
@@ -555,7 +555,7 @@ class Database:
         lower(last_name), lower(company_domain)). If exists: UPDATE
         non-null fields with COALESCE. If new: INSERT.
         """
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         source = person.source_provider.value if person.source_provider else None
         enriched = person.enriched_at.isoformat() if person.enriched_at else None
         email_status = person.email_status.value if person.email_status else "unknown"
@@ -770,7 +770,7 @@ class Database:
 
     async def create_campaign(self, campaign: Campaign) -> Campaign:
         """Insert a new campaign."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         enrichment_types_json = json.dumps([e.value for e in campaign.enrichment_types])
         waterfall_json = json.dumps([p.value for p in campaign.waterfall_order])
         column_mapping_json = json.dumps(campaign.column_mapping)
@@ -807,7 +807,7 @@ class Database:
 
     async def update_campaign_status(self, campaign_id: str, status: CampaignStatus, **kwargs) -> None:
         """Update campaign status plus any extra fields."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         status_val = status.value if isinstance(status, CampaignStatus) else status
 
         sets = ["status = ?"]
@@ -889,7 +889,7 @@ class Database:
         self, row_id: str, status: str, person_id: str = None, error: str = None
     ) -> None:
         """Update a single campaign row's status and optional fields."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         async with self._connect() as conn:
             await conn.execute(
                 """UPDATE campaign_rows SET
@@ -1012,7 +1012,7 @@ class Database:
         today = date.today().isoformat()
         prov = provider if isinstance(provider, str) else provider.value
         usage_id = str(uuid.uuid4())
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
 
         async with self._connect() as conn:
             await conn.execute("BEGIN IMMEDIATE")
@@ -1099,7 +1099,7 @@ class Database:
         today = date.today().isoformat()
         prov = provider if isinstance(provider, str) else provider.value
         usage_id = str(uuid.uuid4())
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
 
         async with self._connect() as conn:
             await conn.execute(
@@ -1186,7 +1186,7 @@ class Database:
         """Upsert an email pattern, increment sample_count, append to examples."""
         domain = domain.lower()
         pattern_id = str(uuid.uuid4())
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
 
         async with self._connect() as conn:
             cursor = await conn.execute(
@@ -1270,7 +1270,7 @@ class Database:
             if checked_at:
                 try:
                     checked_dt = datetime.fromisoformat(checked_at)
-                    if datetime.utcnow() - checked_dt > timedelta(days=90):
+                    if datetime.now(timezone.utc) - checked_dt > timedelta(days=90):
                         return None
                 except (ValueError, TypeError):
                     pass
@@ -1278,7 +1278,7 @@ class Database:
 
     async def set_catch_all_status(self, domain: str, is_catch_all: bool) -> None:
         """Set or update catch-all status for a domain."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         async with self._connect() as conn:
             await conn.execute(
                 """INSERT OR REPLACE INTO domain_catch_all
@@ -1370,9 +1370,9 @@ class Database:
                     provider.lower(),
                     domain.lower(),
                     int(hit),
-                    datetime.utcnow().isoformat(),
+                    datetime.now(timezone.utc).isoformat(),
                     int(hit),
-                    datetime.utcnow().isoformat(),
+                    datetime.now(timezone.utc).isoformat(),
                 ),
             )
 
@@ -1413,7 +1413,7 @@ class Database:
 
     async def save_email_template(self, template: EmailTemplate) -> EmailTemplate:
         """Insert or replace an email template."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         async with self._connect() as conn:
             await conn.execute(
                 """INSERT OR REPLACE INTO email_templates
@@ -1467,7 +1467,7 @@ class Database:
 
     async def save_generated_email(self, email: GeneratedEmail) -> GeneratedEmail:
         """Insert or replace a generated email."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         async with self._connect() as conn:
             await conn.execute(
                 """INSERT OR REPLACE INTO generated_emails
@@ -1512,7 +1512,7 @@ class Database:
 
     async def update_email_status(self, email_id: str, status: str) -> None:
         """Update the status of a generated email."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         async with self._connect() as conn:
             await conn.execute(
                 "UPDATE generated_emails SET status = ?, updated_at = ? WHERE id = ?",
@@ -1523,7 +1523,7 @@ class Database:
         self, email_id: str, subject: str, body: str,
     ) -> None:
         """Update the subject and body of a generated email (inline edit)."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         async with self._connect() as conn:
             await conn.execute(
                 "UPDATE generated_emails SET subject = ?, body = ?, updated_at = ? WHERE id = ?",

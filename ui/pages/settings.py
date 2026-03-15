@@ -7,15 +7,11 @@ from concurrent.futures import ThreadPoolExecutor
 import streamlit as st
 
 from config.settings import ProviderName, load_salesforce_config, persist_settings
-from providers.apollo import ApolloProvider
-from providers.findymail import FindymailProvider
-from providers.icypeas import IcypeasProvider
-from providers.contactout import ContactOutProvider
-from providers.datagma import DatagmaProvider
 from providers.salesforce import SalesforceClient
+from ui.validation import _get_provider_classes
 
 from data.sync import run_sync
-from ui.app import get_database, get_settings, get_key_validation_status
+from ui.shared import get_database, get_settings, get_key_validation_status
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -23,13 +19,7 @@ from ui.app import get_database, get_settings, get_key_validation_status
 
 _EXECUTOR = ThreadPoolExecutor(max_workers=4)
 
-_PROVIDER_CLASSES = {
-    ProviderName.APOLLO: ApolloProvider,
-    ProviderName.FINDYMAIL: FindymailProvider,
-    ProviderName.ICYPEAS: IcypeasProvider,
-    ProviderName.CONTACTOUT: ContactOutProvider,
-    ProviderName.DATAGMA: DatagmaProvider,
-}
+_PROVIDER_CLASSES = _get_provider_classes()
 
 
 def _run_async(coro):

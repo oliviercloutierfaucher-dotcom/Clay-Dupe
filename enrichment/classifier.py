@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 from data.models import RouteCategory
+from providers.validators import _EMAIL_RE, _DOMAIN_RE, _LINKEDIN_RE
 
 
 class FieldSignal:
@@ -17,10 +18,10 @@ class FieldSignal:
     JOB_TITLE      = 0x080
     PHONE          = 0x100
 
-# Regex patterns for field validation
-EMAIL_REGEX = re.compile(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
-DOMAIN_REGEX = re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$')
-LINKEDIN_REGEX = re.compile(r'linkedin\.com/in/', re.IGNORECASE)
+# Re-export from canonical source for backward compatibility
+EMAIL_REGEX = _EMAIL_RE
+DOMAIN_REGEX = _DOMAIN_RE
+LINKEDIN_REGEX = _LINKEDIN_RE
 PHONE_REGEX = re.compile(r'[\d]{7,}')  # 7+ digits after stripping non-digits
 
 

@@ -123,7 +123,7 @@ class TestFindymailProvider:
         if call_args and call_args.kwargs.get("json"):
             body = call_args.kwargs["json"]
             # Should have "name" field with full name
-            assert "name" in body or "full_name" in body or True  # Flexible check
+            assert "name" in body or "full_name" in body
 
     @pytest.mark.asyncio
     async def test_find_email_null_response(self, provider):
@@ -215,7 +215,7 @@ class TestIcypeasProvider:
         result = await provider.find_email("John", "Doe", "acme.com")
         assert result.found is True
         # Confidence should reflect the SURE level
-        assert result.confidence in ("unverified", "SURE", None) or True
+        assert result.confidence in ("unverified", "SURE", None)
 
 
 # ---------------------------------------------------------------------------

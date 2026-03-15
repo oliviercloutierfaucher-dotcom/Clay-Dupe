@@ -23,7 +23,7 @@ from data.sync import run_sync
 from enrichment.contact_discovery import discover_contact, batch_discover_contacts
 from enrichment.icp_scorer import batch_score_companies, score_company
 from providers.apollo import ApolloProvider
-from ui.app import get_database, get_settings, get_key_validation_status
+from ui.shared import get_database, get_settings, get_key_validation_status
 
 # ---------------------------------------------------------------------------
 # Shared resources
