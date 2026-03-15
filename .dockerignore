@@ -9,7 +9,6 @@ __pycache__
 *.db
 *.db-wal
 *.db-shm
-data/
 tests/
 .pytest_cache
 .mypy_cache
