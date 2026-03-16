@@ -1,19 +1,49 @@
-"""Clay-Dupe Enrichment Platform -- Streamlit application entry point.
+"""Permanent Enrichment Tool -- Streamlit application entry point.
 
 Configures page layout, initialises shared resources (database, settings),
 and wires up the multi-page navigation using ``st.navigation()``.
 """
 from __future__ import annotations
 
+import base64
 import hmac
 import os
+from pathlib import Path
 
 import streamlit as st
 
-from config.settings import ProviderName
-from ui.shared import get_settings, get_key_validation_status
-from ui.styles import inject_clay_theme
-from ui.validation import validate_salesforce
+from ui.styles import inject_permanent_theme
+
+# ---------------------------------------------------------------------------
+# Logo helper
+# ---------------------------------------------------------------------------
+
+_ASSETS_DIR = Path(__file__).parent / "assets"
+
+
+def _logo_html(height: int = 40, centered: bool = False, variant: str = "default") -> str:
+    """Return an <img> tag with the Permanent logo embedded as base64.
+
+    Args:
+        height: Logo height in pixels.
+        centered: Center the logo horizontally.
+        variant: 'default' (blue on light bg) or 'white' (white text for dark bg).
+    """
+    filename = "logo-white.svg" if variant == "white" else "logo.svg"
+    svg_bytes = (_ASSETS_DIR / filename).read_bytes()
+    b64 = base64.b64encode(svg_bytes).decode()
+    style = f'height: {height}px;'
+    if centered:
+        return (
+            f'<div style="text-align: center; margin: 48px 0 4px 0;">'
+            f'<img src="data:image/svg+xml;base64,{b64}" style="{style}" />'
+            f'</div>'
+        )
+    return (
+        f'<div style="padding: 8px 0 4px 0;">'
+        f'<img src="data:image/svg+xml;base64,{b64}" style="{style}" />'
+        f'</div>'
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -46,106 +76,64 @@ def check_password() -> bool:
         )
         return True
 
-    st.markdown("### Clay-Dupe Login")
-    entered = st.text_input("Password", type="password", key="login_password")
-    if st.button("Log in", type="primary"):
-        if hmac.compare_digest(entered, password):
-            st.session_state["authenticated"] = True
-            st.rerun()
-        else:
-            st.error("Incorrect password")
+    # Login page with Permanent branding
+    st.markdown(_logo_html(height=52, centered=True), unsafe_allow_html=True)
+    st.markdown(
+        '<p style="text-align: center; color: #64748b; font-size: 0.85rem; margin-bottom: 32px;">'
+        'Enrichment Tool</p>',
+        unsafe_allow_html=True,
+    )
+
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col2:
+        entered = st.text_input("Password", type="password", key="login_password")
+        if st.button("Log in", type="primary", use_container_width=True):
+            if hmac.compare_digest(entered, password):
+                st.session_state["authenticated"] = True
+                st.rerun()
+            else:
+                st.error("Incorrect password")
     return False
 
 
 # ---------------------------------------------------------------------------
 # UI rendering -- entry point only (streamlit run ui/app.py)
-# No pages import this module, so no guard needed.
 # ---------------------------------------------------------------------------
 
 # Page configuration
 st.set_page_config(
-    page_title="Clay-Dupe",
-    page_icon=":material/database:",
+    page_title="Permanent Enrichment Tool",
+    page_icon=":material/corporate_fare:",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-inject_clay_theme()
+inject_permanent_theme()
 
 # Authentication gate -- blocks all pages until authenticated
 if not check_password():
     st.stop()
 
-# Startup provider validation
-settings = get_settings()
-
-key_status = get_key_validation_status()
-valid_providers = [k for k, v in key_status.items() if v]
-invalid_providers = [k for k, v in key_status.items() if not v]
-
-if not valid_providers:
-    st.error(
-        "**No valid API keys detected.** Go to Settings to add your API keys. "
-        "Without at least one valid provider key, enrichment will not work."
-    )
-elif invalid_providers:
-    configured_invalid = [
-        name for name in invalid_providers
-        if settings.providers.get(ProviderName(name), None) is not None
-        and settings.providers[ProviderName(name)].enabled
-        and settings.providers[ProviderName(name)].api_key
-    ]
-    if configured_invalid:
-        st.warning(
-            f"**Invalid API keys detected:** {', '.join(configured_invalid)}. "
-            "These providers will be skipped during enrichment."
-        )
-
-# Salesforce connection status
-sf_status = validate_salesforce()
-if sf_status.get("configured") and not sf_status.get("connected"):
-    st.warning(
-        "**Salesforce connection failed.** SF dedup will be skipped during enrichment. "
-        "Check your credentials in Settings."
-    )
-
-# Navigation
-data_pages = [
-    st.Page("pages/dashboard.py", title="Overview", icon=":material/dashboard:"),
+# Navigation — flat list, no section groupings (matches Sourcing Dashboard)
+pages = [
+    st.Page("pages/dashboard.py", title="Overview", icon=":material/dashboard:", default=True),
     st.Page("pages/companies.py", title="Companies", icon=":material/business:"),
     st.Page("pages/search.py", title="Find Leads", icon=":material/search:"),
-    st.Page("pages/results.py", title="Data Table", icon=":material/table_chart:", default=True),
-]
-
-tools_pages = [
+    st.Page("pages/results.py", title="Data Table", icon=":material/table_chart:"),
     st.Page("pages/enrich.py", title="Enrich", icon=":material/bolt:"),
     st.Page("pages/emails.py", title="Emails", icon=":material/email:"),
     st.Page("pages/analytics.py", title="Analytics", icon=":material/bar_chart:"),
     st.Page("pages/settings.py", title="Settings", icon=":material/settings:"),
 ]
 
-pg = st.navigation(
-    {
-        "Data": data_pages,
-        "Tools": tools_pages,
-    }
-)
+pg = st.navigation(pages)
 
 # Sidebar branding
-with st.sidebar:
-    st.markdown("### Clay-Dupe")
-    st.caption("Open-source enrichment platform")
-    st.divider()
-
-# Persistent top toolbar
-_toolbar_left, _toolbar_credits, _toolbar_action = st.columns([6, 2, 2])
-
-with _toolbar_credits:
-    st.caption("Credits remaining: --")
-
-with _toolbar_action:
-    if st.button("Enrich Data", type="primary", icon=":material/bolt:", use_container_width=True, key="toolbar_enrich"):
-        st.switch_page("pages/enrich.py")
+st.logo(
+    str(_ASSETS_DIR / "logo.svg"),
+    icon_image=str(_ASSETS_DIR / "logo-white.svg"),
+    size="large",
+)
 
 # Run the selected page
 pg.run()
