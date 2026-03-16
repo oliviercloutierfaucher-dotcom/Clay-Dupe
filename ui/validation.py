@@ -6,13 +6,9 @@ provider. Results are cached by the caller (Streamlit cache in app.py).
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
 
 from config.settings import ProviderName, Settings
 from data.sync import run_sync
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 

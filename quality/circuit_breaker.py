@@ -17,6 +17,10 @@ class CircuitState(str, Enum):
 class CircuitBreaker:
     """Per-provider circuit breaker."""
 
+    MAX_RECOVERY_TIMEOUT: float = 300.0
+    BACKOFF_MULTIPLIER: float = 1.5
+    RATE_LIMIT_BACKOFF_MULTIPLIER: float = 2.0
+
     def __init__(
         self,
         provider: ProviderName,
@@ -77,14 +81,20 @@ class CircuitBreaker:
         if self._state == CircuitState.HALF_OPEN:
             # Any failure in half-open -> back to OPEN with longer timeout
             self._state = CircuitState.OPEN
-            self.recovery_timeout = min(self.recovery_timeout * 1.5, 300.0)
+            self.recovery_timeout = min(
+                self.recovery_timeout * self.BACKOFF_MULTIPLIER,
+                self.MAX_RECOVERY_TIMEOUT,
+            )
             self._half_open_calls = 0
             self._success_count = 0
         elif self._failure_count >= self.failure_threshold:
             self._state = CircuitState.OPEN
             # 429 errors get longer recovery timeout
             if error_code == 429:
-                self.recovery_timeout = min(self.recovery_timeout * 2, 300.0)
+                self.recovery_timeout = min(
+                    self.recovery_timeout * self.RATE_LIMIT_BACKOFF_MULTIPLIER,
+                    self.MAX_RECOVERY_TIMEOUT,
+                )
 
         if self._state == CircuitState.HALF_OPEN:
             self._half_open_calls += 1

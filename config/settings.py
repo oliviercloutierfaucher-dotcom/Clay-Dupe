@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import Optional, TYPE_CHECKING
 from pathlib import Path
@@ -183,9 +184,11 @@ def load_all_icp_profiles(db: Database) -> dict[str, ICPPreset]:
 
     combined = dict(ICP_PRESETS)
 
+    logger = logging.getLogger(__name__)
     try:
         custom_rows = run_sync(db.get_icp_profiles())
-    except Exception:
+    except (OSError, TimeoutError) as exc:
+        logger.warning("Failed to load custom ICP profiles from DB: %s", exc)
         return combined
 
     for row in custom_rows:
@@ -208,7 +211,8 @@ def load_all_icp_profiles(db: Database) -> dict[str, ICPPreset]:
                 countries=config.get("countries", ["US", "UK", "CA"]),
             )
             combined[name_key] = preset
-        except Exception:
+        except (ValueError, KeyError, TypeError) as exc:
+            logger.warning("Skipping invalid custom ICP profile %r: %s", name_key, exc)
             continue
 
     return combined

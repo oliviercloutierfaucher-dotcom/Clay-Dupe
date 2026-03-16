@@ -32,5 +32,12 @@ dev = [
 [tool.setuptools.packages.find]
 include = ["cli*", "config*", "cost*", "data*", "enrichment*", "providers*", "quality*", "ui*"]
 
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+filterwarnings = [
+    "ignore::DeprecationWarning:datetime",
+    "ignore::pytest.PytestUnhandledThreadExceptionWarning",
+]
+
 [project.scripts]
 clay-dupe = "cli.main:main"

@@ -36,7 +36,7 @@ def _status_color(status: str) -> str:
 st.header("Overview")
 
 # Retrieve singletons from app.py cache
-from ui.app import get_database, get_settings, get_key_validation_status  # noqa: E402
+from ui.shared import get_database, get_settings, get_key_validation_status  # noqa: E402
 
 db = get_database()
 settings = get_settings()

@@ -31,7 +31,7 @@ from data.models import (
 )
 
 from data.sync import run_sync
-from ui.app import get_database, get_settings, get_key_validation_status
+from ui.shared import get_database, get_settings, get_key_validation_status
 
 logger = logging.getLogger(__name__)
 
@@ -67,11 +67,7 @@ def _run_enrichment_bg(campaign_id: str, db_path: str, settings, force_enrich_do
             create_rate_limiters,
         )
         from quality.verification import EmailVerifier
-        from providers.apollo import ApolloProvider
-        from providers.findymail import FindymailProvider
-        from providers.icypeas import IcypeasProvider
-        from providers.contactout import ContactOutProvider
-        from providers.datagma import DatagmaProvider
+        from ui.validation import _get_provider_classes
 
         # Separate Database instance for this thread
         bg_db = Database(db_path=db_path)
@@ -90,13 +86,7 @@ def _run_enrichment_bg(campaign_id: str, db_path: str, settings, force_enrich_do
         except Exception:
             logger.warning("Salesforce client init failed; skipping SF dedup gate")
 
-        provider_classes = {
-            ProviderName.APOLLO: ApolloProvider,
-            ProviderName.FINDYMAIL: FindymailProvider,
-            ProviderName.ICYPEAS: IcypeasProvider,
-            ProviderName.CONTACTOUT: ContactOutProvider,
-            ProviderName.DATAGMA: DatagmaProvider,
-        }
+        provider_classes = _get_provider_classes()
 
         # Build only enabled providers that have API keys
         providers: dict[ProviderName, Any] = {}
