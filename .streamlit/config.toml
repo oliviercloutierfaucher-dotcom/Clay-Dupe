@@ -18,5 +18,12 @@ toolbarMode = "minimal"
 fastReruns = true
 magicEnabled = false
 
+[theme]
+primaryColor = "#3069e1"
+backgroundColor = "#f3f4f6"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#1c1c1c"
+font = "sans serif"
+
 [logger]
 level = "info"

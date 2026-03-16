@@ -6,30 +6,37 @@ def inject_permanent_theme():
     """Inject Permanent Corp-branded CSS theme into the Streamlit app."""
     st.markdown("""
     <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
     /* ================================================================
        PERMANENT CORP — ENRICHMENT TOOL THEME
-       Brand: Dark navy, Permanent blue (#4479c4) accents
+       Brand: Premium Light Theme (Next.js IC Dashboard aligned)
        ================================================================ */
 
     /* ---- CSS Variables ---- */
     :root {
-        --perm-navy: #1a2332;
-        --perm-navy-light: #243044;
-        --perm-navy-hover: #2d3d56;
-        --perm-brand: #4479c4;
-        --perm-brand-light: #dbe8f7;
-        --perm-blue: #4479c4;
+        --perm-navy: #0f1b2d;
+        --perm-navy-light: #1a2744;
+        --perm-navy-hover: #1e304f;
+        --perm-brand: #3069e1;
+        --perm-brand-light: #eff6ff;
+        --perm-blue: #3069e1;
         --perm-orange: #f59e0b;
-        --perm-bg: #f1f5f9;
+        --perm-bg: #f3f4f6;
         --perm-card: #ffffff;
-        --perm-border: #e2e8f0;
-        --perm-text-dark: #0f172a;
-        --perm-text: #334155;
-        --perm-text-muted: #64748b;
-        --perm-text-light: #94a3b8;
+        --perm-border: #e5e7eb;
+        --perm-text-dark: #1c1c1c;
+        --perm-text: #4b5563;
+        --perm-text-muted: #6b7280;
+        --perm-text-light: #9ca3af;
         --perm-red: #ef4444;
-        --perm-green: #22c55e;
+        --perm-green: #10b981;
         --perm-radius: 8px;
+    }
+
+    /* ---- Base ---- */
+    html, body, [class*="css"] {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
     }
 
     /* ---- Base ---- */

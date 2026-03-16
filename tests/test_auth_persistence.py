@@ -65,11 +65,18 @@ class TestCheckPassword:
     def test_check_password_correct(self):
         """When password matches, session state gets authenticated=True."""
         from ui.app import check_password
+        from unittest.mock import MagicMock
 
         session_state = {}
         with patch("ui.app._get_app_password", return_value="correct"), \
              patch("ui.app.st") as mock_st:
             mock_st.session_state = session_state
+            # st.columns returns 3 context-manageable column mocks
+            mock_cols = [MagicMock(), MagicMock(), MagicMock()]
+            for mc in mock_cols:
+                mc.__enter__ = MagicMock(return_value=mc)
+                mc.__exit__ = MagicMock(return_value=False)
+            mock_st.columns.return_value = mock_cols
             mock_st.text_input.return_value = "correct"
             mock_st.button.return_value = True
             # check_password calls st.rerun() on success -- mock it
@@ -90,10 +97,17 @@ class TestCheckPassword:
     def test_check_password_incorrect(self):
         """When password is wrong, shows error and returns False."""
         from ui.app import check_password
+        from unittest.mock import MagicMock
 
         with patch("ui.app._get_app_password", return_value="correct"), \
              patch("ui.app.st") as mock_st:
             mock_st.session_state = {}
+            # st.columns returns 3 context-manageable column mocks
+            mock_cols = [MagicMock(), MagicMock(), MagicMock()]
+            for mc in mock_cols:
+                mc.__enter__ = MagicMock(return_value=mc)
+                mc.__exit__ = MagicMock(return_value=False)
+            mock_st.columns.return_value = mock_cols
             mock_st.text_input.return_value = "wrong"
             mock_st.button.return_value = True
             result = check_password()

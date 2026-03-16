@@ -8,6 +8,7 @@ from config.settings import ProviderName
 from cost.budget import BudgetManager
 from data.models import CampaignStatus
 from data.sync import run_sync
+from ui.styles import section_header
 
 
 # ---------------------------------------------------------------------------
@@ -35,7 +36,7 @@ def _status_color(status: str) -> str:
 
 st.header("Overview")
 
-# Retrieve singletons from app.py cache
+# Retrieve singletons
 from ui.shared import get_database, get_settings, get_key_validation_status  # noqa: E402
 
 db = get_database()
@@ -44,8 +45,9 @@ settings = get_settings()
 # ---- API Key Status -------------------------------------------------------
 
 key_status = get_key_validation_status()
+
+section_header("Provider Status", "blue")
 with st.container(border=True):
-    st.markdown("**API Key Status**")
     any_invalid = False
     status_cols = st.columns(len(key_status) if key_status else 1)
     for idx, (provider_name, is_valid) in enumerate(key_status.items()):
@@ -62,9 +64,9 @@ with st.container(border=True):
             f"{', '.join(invalid_names)}"
         )
 
-st.divider()
-
 # ---- Top-level metric cards ------------------------------------------------
+
+section_header("Key Metrics", "teal")
 
 stats = run_sync(db.get_dashboard_stats())
 
@@ -74,9 +76,9 @@ col2.metric("Email Find Rate", f"{stats['email_find_rate']}%")
 col3.metric("Active Campaigns", stats["total_campaigns"])
 col4.metric("Spent (30 d)", f"{stats['cost_30d']:,.1f} credits")
 
-st.divider()
-
 # ---- Compact credit usage --------------------------------------------------
+
+section_header("Credit Usage", "orange")
 
 budget_mgr = BudgetManager(db)
 
@@ -88,7 +90,6 @@ for pname, pcfg in settings.providers.items():
         budget_mgr.set_monthly_limit(pname, pcfg.monthly_credit_limit)
 
 with st.container(border=True):
-    st.markdown("**Credit Usage**")
     for pname in ProviderName:
         balance = run_sync(budget_mgr.get_balance(pname))
         daily_limit = balance["daily_limit"]
@@ -109,11 +110,9 @@ with st.container(border=True):
             else:
                 st.caption(f"{daily_used:,.0f} (no limit)")
 
-st.divider()
-
 # ---- Recent campaigns table ------------------------------------------------
 
-st.subheader("Recent Campaigns")
+section_header("Recent Campaigns", "navy")
 
 campaigns = run_sync(db.get_recent_campaigns(limit=10))
 

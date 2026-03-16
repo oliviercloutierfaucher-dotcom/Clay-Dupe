@@ -1,7 +1,7 @@
 services:
-  clay-dupe:
+  permanent-enrichment:
     build: .
-    container_name: clay-dupe
+    container_name: permanent-enrichment
     ports:
       - "8501:8501"
     volumes:

@@ -37,13 +37,13 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build Docker image
-        run: docker build -t clay-dupe:${{ github.sha }} .
+        run: docker build -t permanent-enrichment:${{ github.sha }} .
 
       - name: Verify container starts and health check passes
         run: |
           docker run -d --name test-container -p 8501:8501 \
             -e APP_PASSWORD=test123 \
-            clay-dupe:${{ github.sha }}
+            permanent-enrichment:${{ github.sha }}
           sleep 15
           curl --fail http://localhost:8501/_stcore/health || exit 1
           docker stop test-container

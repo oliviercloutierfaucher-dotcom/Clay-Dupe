@@ -1,4 +1,4 @@
-"""Clay-Dupe CLI -- Typer-based command-line interface for enrichment.
+"""Permanent Enrichment Tool CLI -- Typer-based command-line interface.
 
 Commands
 --------
@@ -52,8 +52,8 @@ nest_asyncio.apply()
 logger = logging.getLogger(__name__)
 
 app = typer.Typer(
-    name="clay-dupe",
-    help="Clay-Dupe enrichment platform CLI.",
+    name="permanent-enrich",
+    help="Permanent Enrichment Tool CLI.",
     add_completion=False,
     no_args_is_help=True,
 )
@@ -1026,7 +1026,7 @@ def list_campaigns(
     if resumable:
         console.print(
             f"\n[dim]Tip: {len(resumable)} campaign(s) can be resumed with:[/] "
-            "[bold]clay-dupe resume <campaign_id>[/]"
+            "[bold]permanent-enrich resume <campaign_id>[/]"
         )
 
 

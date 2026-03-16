@@ -60,14 +60,8 @@ CREATE INDEX IF NOT EXISTS ix_companies_ebitda_usd
 CREATE INDEX IF NOT EXISTS ix_companies_icp_filter
     ON companies(country, employee_count, ebitda_usd);
 
-CREATE INDEX IF NOT EXISTS ix_companies_status
-    ON companies(status);
-
-CREATE INDEX IF NOT EXISTS ix_companies_icp_score
-    ON companies(icp_score);
-
-CREATE INDEX IF NOT EXISTS ix_companies_source_type
-    ON companies(source_type);
+-- NOTE: indexes on status, icp_score, source_type are in Schema migrations
+-- section below, since these columns may not exist in older DBs.
 
 -- ============================================================
 -- 1b. icp_profiles
@@ -412,6 +406,14 @@ CREATE INDEX IF NOT EXISTS ix_generated_emails_campaign_status
 -- ============================================================
 -- Schema migrations
 -- ============================================================
+
+-- Phase 10: Company sourcing columns (may already exist in newer DBs)
+ALTER TABLE companies ADD COLUMN source_type TEXT DEFAULT 'apollo_search';
+ALTER TABLE companies ADD COLUMN icp_score INTEGER;
+ALTER TABLE companies ADD COLUMN status TEXT DEFAULT 'new';
+CREATE INDEX IF NOT EXISTS ix_companies_status ON companies(status);
+CREATE INDEX IF NOT EXISTS ix_companies_icp_score ON companies(icp_score);
+CREATE INDEX IF NOT EXISTS ix_companies_source_type ON companies(source_type);
 
 -- Phase 11: Salesforce integration (sf_status values: "in_sf" or NULL)
 ALTER TABLE companies ADD COLUMN sf_account_id TEXT;
