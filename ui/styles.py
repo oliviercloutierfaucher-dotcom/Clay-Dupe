@@ -8,7 +8,7 @@ def inject_permanent_theme():
     <style>
     /* ================================================================
        PERMANENT CORP — ENRICHMENT TOOL THEME
-       Brand: Dark navy, teal accents, clean corporate
+       Brand: Dark navy, Permanent blue (#4479c4) accents
        ================================================================ */
 
     /* ---- CSS Variables ---- */
@@ -16,9 +16,9 @@ def inject_permanent_theme():
         --perm-navy: #1a2332;
         --perm-navy-light: #243044;
         --perm-navy-hover: #2d3d56;
-        --perm-teal: #10b981;
-        --perm-teal-light: #d1fae5;
-        --perm-blue: #3b82f6;
+        --perm-brand: #4479c4;
+        --perm-brand-light: #dbe8f7;
+        --perm-blue: #4479c4;
         --perm-orange: #f59e0b;
         --perm-bg: #f1f5f9;
         --perm-card: #ffffff;
@@ -75,7 +75,7 @@ def inject_permanent_theme():
     [data-testid="stSidebar"] [data-testid="stSidebarNavLink"][aria-current="page"] {
         background-color: var(--perm-navy-light) !important;
         color: #ffffff !important;
-        border-left: 3px solid var(--perm-teal) !important;
+        border-left: 3px solid var(--perm-brand) !important;
     }
 
     /* Sidebar section headers — hidden (flat nav, no groupings) */
@@ -84,20 +84,25 @@ def inject_permanent_theme():
         display: none !important;
     }
 
+    /* ---- Base font size ---- */
+    .stApp, .stApp p, .stApp span, .stApp div {
+        font-size: 0.95rem;
+    }
+
     /* ---- Headers: Professional, clean ---- */
     .stApp h1 {
-        font-size: 1.5rem !important;
+        font-size: 1.75rem !important;
         font-weight: 700 !important;
         color: var(--perm-text-dark) !important;
         letter-spacing: -0.01em !important;
     }
     .stApp h2 {
-        font-size: 1.15rem !important;
+        font-size: 1.35rem !important;
         font-weight: 600 !important;
         color: var(--perm-text-dark) !important;
     }
     .stApp h3 {
-        font-size: 0.95rem !important;
+        font-size: 1.1rem !important;
         font-weight: 600 !important;
         color: var(--perm-text) !important;
         text-transform: uppercase !important;
@@ -108,25 +113,25 @@ def inject_permanent_theme():
     [data-testid="stMetric"] {
         background: var(--perm-card);
         border: 1px solid var(--perm-border);
-        border-left: 3px solid var(--perm-teal);
+        border-left: 3px solid var(--perm-brand);
         border-radius: var(--perm-radius);
         padding: 16px 20px;
         box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
     }
     [data-testid="stMetricLabel"] {
-        font-size: 0.7rem !important;
+        font-size: 0.8rem !important;
         text-transform: uppercase !important;
         letter-spacing: 0.06em !important;
         color: var(--perm-text-muted) !important;
         font-weight: 600 !important;
     }
     [data-testid="stMetricValue"] {
-        font-size: 1.5rem !important;
+        font-size: 1.75rem !important;
         font-weight: 700 !important;
         color: var(--perm-text-dark) !important;
     }
     [data-testid="stMetricDelta"] {
-        font-size: 0.75rem !important;
+        font-size: 0.85rem !important;
     }
 
     /* ---- Primary buttons: Navy, professional ---- */
@@ -137,7 +142,7 @@ def inject_permanent_theme():
         border: none !important;
         border-radius: 6px !important;
         font-weight: 600 !important;
-        font-size: 0.82rem !important;
+        font-size: 0.95rem !important;
         padding: 8px 20px !important;
         transition: all 0.2s ease !important;
         letter-spacing: 0.01em !important;
@@ -156,7 +161,7 @@ def inject_permanent_theme():
         border: 1px solid var(--perm-border) !important;
         border-radius: 6px !important;
         font-weight: 500 !important;
-        font-size: 0.82rem !important;
+        font-size: 0.95rem !important;
         transition: all 0.2s ease !important;
     }
     .stButton > button[kind="secondary"]:hover,
@@ -170,7 +175,7 @@ def inject_permanent_theme():
     .stButton > button {
         border-radius: 6px !important;
         font-weight: 500 !important;
-        font-size: 0.82rem !important;
+        font-size: 0.95rem !important;
         transition: all 0.2s ease !important;
     }
 
@@ -211,7 +216,7 @@ def inject_permanent_theme():
     .stTabs [data-baseweb="tab"] {
         padding: 10px 24px !important;
         font-weight: 500 !important;
-        font-size: 0.82rem !important;
+        font-size: 0.95rem !important;
         color: var(--perm-text-muted) !important;
         text-transform: uppercase !important;
         letter-spacing: 0.03em !important;
@@ -224,7 +229,7 @@ def inject_permanent_theme():
 
     /* ---- Progress bars: teal ---- */
     .stProgress > div > div > div > div {
-        background-color: var(--perm-teal) !important;
+        background-color: var(--perm-brand) !important;
     }
 
     /* ---- Selectbox, text input: clean ---- */
@@ -234,7 +239,7 @@ def inject_permanent_theme():
     [data-testid="stTextArea"] > div > div > textarea {
         border-radius: 6px !important;
         border: 1px solid var(--perm-border) !important;
-        font-size: 0.85rem !important;
+        font-size: 0.95rem !important;
     }
     [data-testid="stSelectbox"] > div > div:focus-within,
     [data-testid="stTextInput"] > div > div > input:focus,
@@ -252,7 +257,7 @@ def inject_permanent_theme():
     .stMultiSelect label,
     .stRadio label,
     .stCheckbox label {
-        font-size: 0.78rem !important;
+        font-size: 0.85rem !important;
         font-weight: 600 !important;
         color: var(--perm-text-muted) !important;
         text-transform: uppercase !important;
@@ -282,7 +287,7 @@ def inject_permanent_theme():
         border-left-color: var(--perm-red) !important;
     }
     .stAlert [data-testid="stAlertContentSuccess"] {
-        border-left-color: var(--perm-teal) !important;
+        border-left-color: var(--perm-brand) !important;
     }
 
     /* ---- Download buttons ---- */
@@ -320,11 +325,11 @@ def inject_permanent_theme():
         flex-shrink: 0;
     }
     .perm-section-header .accent-blue { background-color: var(--perm-blue); }
-    .perm-section-header .accent-teal { background-color: var(--perm-teal); }
+    .perm-section-header .accent-teal { background-color: var(--perm-brand); }
     .perm-section-header .accent-orange { background-color: var(--perm-orange); }
     .perm-section-header .accent-navy { background-color: var(--perm-navy); }
     .perm-section-header .section-title {
-        font-size: 0.85rem;
+        font-size: 0.95rem;
         font-weight: 700;
         text-transform: uppercase;
         letter-spacing: 0.06em;
@@ -343,7 +348,7 @@ def inject_permanent_theme():
         letter-spacing: 0.04em;
     }
     .status-running { background: #dbeafe; color: #1e40af; }
-    .status-completed { background: var(--perm-teal-light); color: #065f46; }
+    .status-completed { background: var(--perm-brand-light); color: #065f46; }
     .status-failed { background: #fee2e2; color: #991b1b; }
     .status-paused { background: #fef3c7; color: #92400e; }
     .status-created { background: #f0f0f5; color: #4b5563; }
@@ -404,7 +409,7 @@ def inject_permanent_theme():
 
     /* ---- Radio buttons ---- */
     .stRadio [data-testid="stMarkdownContainer"] p {
-        font-size: 0.85rem !important;
+        font-size: 0.95rem !important;
     }
 
     /* ---- Checkbox ---- */

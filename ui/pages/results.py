@@ -20,14 +20,9 @@ from ui.shared import get_database, get_settings
 
 db = get_database()
 
-# ---- Header row: title + action button ------------------------------------
+# ---- Header ---------------------------------------------------------------
 
-header_cols = st.columns([4, 1])
-with header_cols[0]:
-    st.subheader("Data Table")
-with header_cols[1]:
-    if st.button("Enrich Data", type="primary", icon=":material/bolt:", use_container_width=True):
-        st.switch_page("pages/enrich.py")
+st.header("Data Table")
 
 # ---- Inline filter bar ----------------------------------------------------
 
