@@ -27,7 +27,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 10: Infrastructure + Company Sourcing** - SQLite write queue, API key validation, and full company sourcing pipeline (Apollo search, CSV import, manual add, contact discovery, ICP scoring) (completed 2026-03-08)
 - [ ] **Phase 11: Salesforce Integration** - Connection management, batch account dedup, and duplicate flagging in enrichment UI
 - [x] **Phase 12: AI Email Generation + Export** - Claude-powered personalized emails with templates, batch generation, preview/edit, and Outreach.io CSV export (completed 2026-03-08)
-- [ ] **Phase 13: Cloud Deployment + Pipeline Polish** - Docker-based cloud deployment and end-to-end pipeline integration testing
+- [x] **Phase 13: Cloud Deployment + Pipeline Polish** - Docker-based cloud deployment and end-to-end pipeline integration testing (completed 2026-03-17)
 
 ## Phase Details
 
@@ -125,4 +125,4 @@ Phases execute in numeric order: 10 -> 10.x -> 11 -> 11.x -> 12 -> 12.x -> 13
 | 11. Salesforce Integration | 2/2 | Complete | 2026-03-08 | - |
 | 12. AI Email Generation + Export | 2/2 | Complete   | 2026-03-08 | - |
 | 12.1 Production Hardening (INSERTED) | 2/2 | Complete   | 2026-03-08 | - |
-| 13. Cloud Deployment + Pipeline Polish | 1/2 | In Progress|  | - |
+| 13. Cloud Deployment + Pipeline Polish | 1/2 | Complete    | 2026-03-17 | - |
