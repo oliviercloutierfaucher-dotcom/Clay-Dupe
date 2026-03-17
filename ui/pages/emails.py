@@ -387,6 +387,7 @@ status_filter = st.radio(
     options=["All", "Draft", "Approved", "Rejected", "Failed"],
     horizontal=True,
     label_visibility="collapsed",
+    key="email_status_filter",
 )
 
 filter_status = None if status_filter == "All" else status_filter.lower()

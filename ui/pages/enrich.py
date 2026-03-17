@@ -12,8 +12,6 @@ import asyncio
 import io
 import logging
 import threading
-import time
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any
 
@@ -38,9 +36,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-_EXECUTOR = ThreadPoolExecutor(max_workers=2)
-
 
 def _run_async(coro):
     """Run an async coroutine from synchronous Streamlit code."""

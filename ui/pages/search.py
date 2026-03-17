@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import pandas as pd
@@ -18,9 +17,6 @@ from ui.shared import get_database, get_settings
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-_EXECUTOR = ThreadPoolExecutor(max_workers=2)
-
 
 def _run_async(coro):
     """Run an async coroutine from synchronous Streamlit code."""
@@ -66,6 +62,7 @@ with st.expander("Search Filters", expanded=True):
         options=["custom"] + preset_names,
         format_func=lambda x: "Custom" if x == "custom" else preset_display.get(x, x),
         horizontal=True,
+        key="icp_preset_selector",
     )
 
     # Resolve preset values
@@ -112,7 +109,7 @@ with st.expander("Search Filters", expanded=True):
 
 search_row = st.columns([2, 2, 4])
 with search_row[0]:
-    search_type = st.radio("Search type", ["Companies", "People"], horizontal=True)
+    search_type = st.radio("Search type", ["Companies", "People"], horizontal=True, key="search_type_selector")
 with search_row[1]:
     st.markdown("")
     search_btn = st.button("Search", type="primary", icon=":material/search:")
