@@ -9,7 +9,6 @@ Commands
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import sys
 from pathlib import Path
@@ -46,7 +45,7 @@ from providers.contactout import ContactOutProvider
 from providers.datagma import DatagmaProvider
 from providers.base import BaseProvider
 
-# Allow asyncio.run() inside Typer callbacks (which may already have a loop)
+# Allow run_sync() inside Typer callbacks (which may already have a loop)
 nest_asyncio.apply()
 
 logger = logging.getLogger(__name__)
@@ -239,7 +238,7 @@ def enrich(
         raise typer.Exit(code=1)
 
     # Run health checks and display summary
-    health = asyncio.run(_run_health_checks(providers, settings))
+    health = run_sync(_run_health_checks(providers, settings))
     status_parts = []
     healthy_providers: set[ProviderName] = set()
     for pname in ProviderName:
@@ -265,7 +264,7 @@ def enrich(
             "[bold red]No healthy providers available for enrichment.[/] "
             "Check your API keys and provider status above."
         )
-        asyncio.run(_close_providers(providers))
+        run_sync(_close_providers(providers))
         raise typer.Exit(code=1)
 
     # --- Cost estimate ---
@@ -312,13 +311,13 @@ def enrich(
 
     if dry_run:
         console.print("\n[dim]Dry run -- no enrichment performed.[/]")
-        asyncio.run(_close_providers(providers))
+        run_sync(_close_providers(providers))
         return
 
     # --- Confirm ---
     if not typer.confirm("\nProceed with enrichment?", default=True):
         console.print("[dim]Aborted.[/]")
-        asyncio.run(_close_providers(providers))
+        run_sync(_close_providers(providers))
         return
 
     # --- Create campaign ---
@@ -457,19 +456,19 @@ def enrich(
         return enriched_people, {}, enrichment_meta
 
     try:
-        people, companies, meta = asyncio.run(_run_enrichment())
+        people, companies, meta = run_sync(_run_enrichment())
     except KeyboardInterrupt:
         console.print("\n[yellow]Interrupted -- saving partial results.[/]")
         run_sync(db.update_campaign_status(campaign.id, CampaignStatus.CANCELLED))
-        asyncio.run(_close_providers(providers))
+        run_sync(_close_providers(providers))
         raise typer.Exit(code=130)
     except Exception as exc:
         console.print(f"\n[bold red]Enrichment failed:[/] {exc}")
         run_sync(db.update_campaign_status(campaign.id, CampaignStatus.FAILED))
-        asyncio.run(_close_providers(providers))
+        run_sync(_close_providers(providers))
         raise typer.Exit(code=1)
     finally:
-        asyncio.run(_close_providers(providers))
+        run_sync(_close_providers(providers))
 
     # --- Export ---
     if people:
@@ -579,10 +578,10 @@ def search(
     console.print(f"\n[bold]Searching Apollo for {target}...[/]\n")
 
     try:
-        results = asyncio.run(_search())
+        results = run_sync(_search())
     except Exception as exc:
         console.print(f"[bold red]Search failed:[/] {exc}")
-        asyncio.run(_close_providers(providers))
+        run_sync(_close_providers(providers))
         raise typer.Exit(code=1)
 
     if not results:
@@ -840,7 +839,7 @@ def resume(
     campaign = run_sync(db.get_campaign(campaign_id))
     if campaign is None:
         console.print(f"[bold red]Campaign not found:[/] {campaign_id}")
-        asyncio.run(_close_providers(providers))
+        run_sync(_close_providers(providers))
         raise typer.Exit(code=1)
 
     console.print(f"\n[bold]Resuming campaign:[/] {campaign.name}  ({campaign.id})")
@@ -861,7 +860,7 @@ def resume(
 
     if remaining == 0:
         console.print("[green]Nothing to resume — all rows are already complete.[/]")
-        asyncio.run(_close_providers(providers))
+        run_sync(_close_providers(providers))
         return
 
     # Update campaign status to RUNNING
@@ -916,19 +915,19 @@ def resume(
         return results
 
     try:
-        results = asyncio.run(_run_resume())
+        results = run_sync(_run_resume())
     except KeyboardInterrupt:
         console.print("\n[yellow]Interrupted -- partial progress saved.[/]")
         run_sync(db.update_campaign_status(campaign_id, CampaignStatus.PAUSED))
-        asyncio.run(_close_providers(providers))
+        run_sync(_close_providers(providers))
         raise typer.Exit(code=130)
     except Exception as exc:
         console.print(f"\n[bold red]Resume failed:[/] {exc}")
         run_sync(db.update_campaign_status(campaign_id, CampaignStatus.FAILED))
-        asyncio.run(_close_providers(providers))
+        run_sync(_close_providers(providers))
         raise typer.Exit(code=1)
     finally:
-        asyncio.run(_close_providers(providers))
+        run_sync(_close_providers(providers))
 
     # Summary
     found = sum(1 for r in results if r.found)

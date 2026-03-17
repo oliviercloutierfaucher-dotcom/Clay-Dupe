@@ -59,10 +59,16 @@ def _get_app_password() -> str:
         return os.getenv("APP_PASSWORD", "")
 
 
+def _is_local_dev() -> bool:
+    """True when running locally (not on Railway/cloud)."""
+    return not os.getenv("RAILWAY_ENVIRONMENT") and not os.getenv("PORT")
+
+
 def check_password() -> bool:
     """Show login form and return True if authenticated.
 
-    Fallback chain: st.secrets -> APP_PASSWORD env var -> warn and allow.
+    Fails closed: if APP_PASSWORD is not set, blocks access entirely
+    unless running in local dev (no RAILWAY_ENVIRONMENT or PORT env var).
     Uses hmac.compare_digest for timing-safe comparison.
     """
     if st.session_state.get("authenticated"):
@@ -70,11 +76,13 @@ def check_password() -> bool:
 
     password = _get_app_password()
     if not password:
-        st.warning(
-            "No APP_PASSWORD configured. "
-            "Set it in .streamlit/secrets.toml or as environment variable."
+        if _is_local_dev():
+            return True
+        st.error(
+            "**Access denied.** APP_PASSWORD is not configured. "
+            "Set it in environment variables to enable access."
         )
-        return True
+        return False
 
     # Login page with Permanent branding
     st.markdown(_logo_html(height=52, centered=True), unsafe_allow_html=True)

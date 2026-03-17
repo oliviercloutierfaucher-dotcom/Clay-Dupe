@@ -51,16 +51,28 @@ class TestGetAppPassword:
 class TestCheckPassword:
     """Tests for check_password() function."""
 
-    def test_check_password_no_password_configured(self):
-        """When no password configured, check_password() returns True (allow access with warning)."""
+    def test_check_password_no_password_blocks_in_production(self):
+        """When no password configured in production, check_password() returns False."""
         from ui.app import check_password
 
         with patch("ui.app._get_app_password", return_value=""), \
+             patch("ui.app._is_local_dev", return_value=False), \
+             patch("ui.app.st") as mock_st:
+            mock_st.session_state = {}
+            result = check_password()
+        assert result is False
+        mock_st.error.assert_called_once()
+
+    def test_check_password_no_password_allows_local_dev(self):
+        """When no password configured locally, check_password() allows access."""
+        from ui.app import check_password
+
+        with patch("ui.app._get_app_password", return_value=""), \
+             patch("ui.app._is_local_dev", return_value=True), \
              patch("ui.app.st") as mock_st:
             mock_st.session_state = {}
             result = check_password()
         assert result is True
-        mock_st.warning.assert_called_once()
 
     def test_check_password_correct(self):
         """When password matches, session state gets authenticated=True."""

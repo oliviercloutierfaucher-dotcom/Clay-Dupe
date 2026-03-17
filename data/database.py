@@ -97,10 +97,16 @@ class Database:
         return self._conn
 
     @asynccontextmanager
-    async def _connect(self):
-        """Async context manager reusing a singleton DB connection. WAL mode, FK ON, busy_timeout=5000.
+    async def _read(self):
+        """Async context manager for read-only queries. No lock, no commit."""
+        conn = await self._get_connection()
+        yield conn
 
-        Serializes all writes through ``_write_lock`` to prevent SQLITE_BUSY
+    @asynccontextmanager
+    async def _connect(self):
+        """Async context manager for write operations.
+
+        Serializes writes through ``_write_lock`` to prevent SQLITE_BUSY
         errors when multiple coroutines write concurrently.
         """
         async with self._write_lock:
@@ -224,7 +230,7 @@ class Database:
         query_hash = hashlib.sha256(
             json.dumps(query_input, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
-        expires_at = (datetime.now(timezone.utc) + timedelta(days=ttl_days)).isoformat()
+        expires_at = (datetime.now(timezone.utc) + timedelta(days=ttl_days)).strftime("%Y-%m-%d %H:%M:%S")
         prov = provider if isinstance(provider, str) else provider.value
         etype = enrichment_type if isinstance(enrichment_type, str) else enrichment_type.value
 
@@ -392,7 +398,7 @@ class Database:
     async def get_company_by_domain(self, domain: str) -> Optional[Company]:
         """Fetch a company by its domain."""
         domain = domain.strip().lower()
-        async with self._connect() as conn:
+        async with self._read() as conn:
             cursor = await conn.execute(
                 "SELECT * FROM companies WHERE domain = ?", (domain,)
             )
@@ -422,7 +428,7 @@ class Database:
         self, sf_status: Optional[str] = None
     ) -> list[Company]:
         """Return companies filtered by sf_status. If None, return all."""
-        async with self._connect() as conn:
+        async with self._read() as conn:
             if sf_status is not None:
                 cursor = await conn.execute(
                     "SELECT * FROM companies WHERE sf_status = ?",
@@ -481,7 +487,7 @@ class Database:
         where = " AND ".join(clauses) if clauses else "1=1"
         sql = "SELECT * FROM companies WHERE " + where + " ORDER BY name"
 
-        async with self._connect() as conn:
+        async with self._read() as conn:
             cursor = await conn.execute(sql, params)
             rows = await cursor.fetchall()
             return [self._row_to_company(r) for r in rows]
@@ -509,7 +515,7 @@ class Database:
 
     async def get_icp_profiles(self) -> list[dict]:
         """Return all ICP profiles as dicts with parsed config."""
-        async with self._connect() as conn:
+        async with self._read() as conn:
             cursor = await conn.execute(
                 "SELECT * FROM icp_profiles ORDER BY name"
             )
@@ -539,7 +545,7 @@ class Database:
 
     async def get_person(self, person_id: str) -> Optional[Person]:
         """Get a person by ID."""
-        async with self._connect() as conn:
+        async with self._read() as conn:
             cursor = await conn.execute(
                 "SELECT * FROM people WHERE id = ?", (person_id,),
             )
@@ -656,7 +662,7 @@ class Database:
 
     async def get_person_by_email(self, email: str) -> Optional[Person]:
         """Fetch a person by email address."""
-        async with self._connect() as conn:
+        async with self._read() as conn:
             cursor = await conn.execute(
                 "SELECT * FROM people WHERE email = ?", (email.strip().lower(),)
             )
@@ -669,7 +675,7 @@ class Database:
         self, first_name: str, last_name: str, domain: str,
     ) -> Optional[Person]:
         """Fetch a person by (first_name, last_name, company_domain)."""
-        async with self._connect() as conn:
+        async with self._read() as conn:
             cursor = await conn.execute(
                 """SELECT * FROM people
                    WHERE lower(first_name) = ? AND lower(last_name) = ?
@@ -694,7 +700,7 @@ class Database:
             return {}
 
         results: dict[tuple[str, str, str], Person] = {}
-        async with self._connect() as conn:
+        async with self._read() as conn:
             # Normalise keys and build OR conditions in batches of 50
             # to stay well within SQLite's variable limit.
             normalised = [
@@ -759,7 +765,7 @@ class Database:
         where = " AND ".join(clauses) if clauses else "1=1"
         sql = "SELECT * FROM people WHERE " + where + " ORDER BY full_name"
 
-        async with self._connect() as conn:
+        async with self._read() as conn:
             cursor = await conn.execute(sql, params)
             rows = await cursor.fetchall()
             return [self._row_to_person(r) for r in rows]
@@ -847,7 +853,7 @@ class Database:
 
     async def get_campaign(self, campaign_id: str) -> Optional[Campaign]:
         """Fetch a single campaign by ID."""
-        async with self._connect() as conn:
+        async with self._read() as conn:
             cursor = await conn.execute(
                 "SELECT * FROM campaigns WHERE id = ?", (campaign_id,)
             )
@@ -858,7 +864,7 @@ class Database:
 
     async def get_recent_campaigns(self, limit: int = 10) -> list[Campaign]:
         """Get recent campaigns ordered by created_at DESC."""
-        async with self._connect() as conn:
+        async with self._read() as conn:
             cursor = await conn.execute(
                 "SELECT * FROM campaigns ORDER BY created_at DESC LIMIT ?", (limit,)
             )
@@ -903,7 +909,7 @@ class Database:
 
     async def get_pending_rows(self, campaign_id: str, limit: int = 100) -> list[dict]:
         """Get pending rows for a campaign."""
-        async with self._connect() as conn:
+        async with self._read() as conn:
             cursor = await conn.execute(
                 """SELECT * FROM campaign_rows
                    WHERE campaign_id = ? AND status = 'pending'
@@ -925,7 +931,7 @@ class Database:
 
     async def get_failed_rows(self, campaign_id: str, limit: int = 100) -> list[dict]:
         """Get failed rows for a campaign (for retry on resume)."""
-        async with self._connect() as conn:
+        async with self._read() as conn:
             cursor = await conn.execute(
                 """SELECT * FROM campaign_rows
                    WHERE campaign_id = ? AND status = 'failed'
@@ -947,7 +953,7 @@ class Database:
 
     async def get_campaign_row_stats(self, campaign_id: str) -> dict:
         """Get per-status counts for a campaign's rows."""
-        async with self._connect() as conn:
+        async with self._read() as conn:
             cursor = await conn.execute(
                 """SELECT status, COUNT(*) as cnt
                    FROM campaign_rows
@@ -1085,7 +1091,7 @@ class Database:
         where = " AND ".join(clauses) if clauses else "1=1"
         sql = "SELECT * FROM enrichment_results WHERE " + where + " ORDER BY found_at DESC"
 
-        async with self._connect() as conn:
+        async with self._read() as conn:
             cursor = await conn.execute(sql, params)
             rows = await cursor.fetchall()
             return [self._row_to_enrichment_result(r) for r in rows]
@@ -1126,7 +1132,7 @@ class Database:
         prov = provider if isinstance(provider, str) else provider.value
         cutoff = (date.today() - timedelta(days=days)).isoformat()
 
-        async with self._connect() as conn:
+        async with self._read() as conn:
             cursor = await conn.execute(
                 """SELECT * FROM credit_usage
                    WHERE provider = ? AND date >= ?
@@ -1140,7 +1146,7 @@ class Database:
         """Get credit usage for a specific provider and date."""
         prov = provider if isinstance(provider, str) else provider.value
 
-        async with self._connect() as conn:
+        async with self._read() as conn:
             cursor = await conn.execute(
                 "SELECT * FROM credit_usage WHERE provider = ? AND date = ?",
                 (prov, date_str),
@@ -1163,7 +1169,7 @@ class Database:
 
     async def get_domain_patterns(self, domain: str) -> list[dict]:
         """Return all email patterns for a domain."""
-        async with self._connect() as conn:
+        async with self._read() as conn:
             cursor = await conn.execute(
                 "SELECT * FROM email_patterns WHERE domain = ? ORDER BY confidence DESC",
                 (domain.lower(),),
@@ -1257,7 +1263,7 @@ class Database:
 
     async def get_catch_all_status(self, domain: str) -> Optional[bool]:
         """Check domain_catch_all table. Return None if not checked or expired >90 days."""
-        async with self._connect() as conn:
+        async with self._read() as conn:
             cursor = await conn.execute(
                 "SELECT * FROM domain_catch_all WHERE domain = ?",
                 (domain.lower(),),
@@ -1293,7 +1299,7 @@ class Database:
 
     async def get_dashboard_stats(self) -> dict:
         """Single query returning dashboard statistics."""
-        async with self._connect() as conn:
+        async with self._read() as conn:
             cursor = await conn.execute(
                 "SELECT COUNT(*) FROM people WHERE email IS NOT NULL AND email != ''"
             )
@@ -1383,7 +1389,7 @@ class Database:
         min_attempts: int = 5,
     ) -> bool:
         """Return True if the provider has 0 hits over min_attempts for this domain."""
-        async with self._connect() as conn:
+        async with self._read() as conn:
             cursor = await conn.execute(
                 """SELECT attempts, hits FROM provider_domain_stats
                    WHERE provider = ? AND domain = ?""",
@@ -1436,7 +1442,7 @@ class Database:
 
     async def get_email_templates(self) -> list[EmailTemplate]:
         """Return all email templates."""
-        async with self._connect() as conn:
+        async with self._read() as conn:
             cursor = await conn.execute(
                 "SELECT * FROM email_templates ORDER BY sequence_step, name"
             )
@@ -1445,7 +1451,7 @@ class Database:
 
     async def get_email_template(self, template_id: str) -> Optional[EmailTemplate]:
         """Return a single email template by ID."""
-        async with self._connect() as conn:
+        async with self._read() as conn:
             cursor = await conn.execute(
                 "SELECT * FROM email_templates WHERE id = ?", (template_id,)
             )
@@ -1505,7 +1511,7 @@ class Database:
         else:
             query = "SELECT * FROM generated_emails WHERE campaign_id = ? ORDER BY generated_at"
             params = (campaign_id,)
-        async with self._connect() as conn:
+        async with self._read() as conn:
             cursor = await conn.execute(query, params)
             rows = await cursor.fetchall()
             return [self._row_to_generated_email(r) for r in rows]
@@ -1559,7 +1565,7 @@ class Database:
 
         company = None
         if person.company_id:
-            async with self._connect() as conn:
+            async with self._read() as conn:
                 cursor = await conn.execute(
                     "SELECT * FROM companies WHERE id = ?", (person.company_id,)
                 )

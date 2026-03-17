@@ -135,7 +135,7 @@ class BudgetManager:
 
     async def get_campaign_spend(self, campaign_id: str) -> dict:
         """Returns per-provider breakdown for a campaign."""
-        async with self.db._connect() as conn:
+        async with self.db._read() as conn:
             cursor = await conn.execute("""
                 SELECT source_provider, SUM(cost_credits) as total_credits,
                        COUNT(*) as total_calls,
@@ -166,7 +166,7 @@ class BudgetManager:
         if cached is not None:
             return cached
 
-        async with self.db._connect() as conn:
+        async with self.db._read() as conn:
             cursor = await conn.execute(
                 "SELECT credits_used FROM credit_usage WHERE provider = ? AND date = ?",
                 (provider.value, today)
@@ -183,7 +183,7 @@ class BudgetManager:
         if cached is not None:
             return cached
 
-        async with self.db._connect() as conn:
+        async with self.db._read() as conn:
             cursor = await conn.execute(
                 "SELECT SUM(credits_used) as total FROM credit_usage WHERE provider = ? AND date >= ?",
                 (provider.value, month_start)
@@ -199,7 +199,7 @@ class BudgetManager:
         if cached is not None:
             return cached
 
-        async with self.db._connect() as conn:
+        async with self.db._read() as conn:
             cursor = await conn.execute(
                 "SELECT SUM(cost_credits) as total FROM enrichment_results WHERE campaign_id = ?",
                 (campaign_id,)

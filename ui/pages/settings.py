@@ -269,7 +269,7 @@ cache_cols = st.columns(3)
 with cache_cols[0]:
     st.markdown("**Cache Statistics**")
     async def _fetch_cache_stats():
-        async with db._connect() as conn:
+        async with db._read() as conn:
             cur = await conn.execute("SELECT COUNT(*) FROM cache")
             total_cached = (await cur.fetchone())[0]
             cur = await conn.execute(
@@ -289,7 +289,7 @@ with cache_cols[0]:
 with cache_cols[1]:
     st.markdown("**Cache by Provider**")
     async def _fetch_cache_by_provider():
-        async with db._connect() as conn:
+        async with db._read() as conn:
             cur = await conn.execute(
                 "SELECT provider, COUNT(*) as cnt, SUM(hit_count) as hits "
                 "FROM cache WHERE expires_at > CURRENT_TIMESTAMP "

@@ -44,7 +44,7 @@ def _get_campaign_person_ids(db: Database, campaign_id: str) -> list[str]:
     """Return person_ids associated with a campaign via campaign_rows."""
 
     async def _fetch():
-        async with db._connect() as conn:
+        async with db._read() as conn:
             cursor = await conn.execute(
                 "SELECT DISTINCT person_id FROM campaign_rows "
                 "WHERE campaign_id = ? AND person_id IS NOT NULL",
@@ -407,7 +407,7 @@ persons_map = _get_persons_map(db, all_person_ids)
 companies_map = {}
 for cid in all_company_ids:
     async def _get_company(company_id=cid):
-        async with db._connect() as conn:
+        async with db._read() as conn:
             cursor = await conn.execute("SELECT * FROM companies WHERE id = ?", (company_id,))
             row = await cursor.fetchone()
             if row:
@@ -573,7 +573,7 @@ else:
     for cid in export_company_ids:
         if cid not in companies_map:
             async def _get_comp(company_id=cid):
-                async with db._connect() as conn:
+                async with db._read() as conn:
                     cursor = await conn.execute("SELECT * FROM companies WHERE id = ?", (company_id,))
                     row = await cursor.fetchone()
                     if row:

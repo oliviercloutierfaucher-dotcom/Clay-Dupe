@@ -159,7 +159,7 @@ class ABTestRunner:
         report = ABTestReport(config_name=test_name)
 
         # Query audit log for shadow results
-        async with self.db._connect() as conn:
+        async with self.db._read() as conn:
             cursor = await conn.execute(
                 """SELECT details FROM audit_log
                    WHERE action = 'ab_test_shadow'

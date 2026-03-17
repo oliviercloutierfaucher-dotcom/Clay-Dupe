@@ -164,7 +164,7 @@ class CacheManager:
     async def get_stats(self) -> dict[str, Any]:
         """Return aggregate cache statistics."""
         try:
-            async with self.db._connect() as conn:
+            async with self.db._read() as conn:
                 cursor = await conn.execute(
                     """SELECT
                            COUNT(*) AS total,

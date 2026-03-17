@@ -170,7 +170,7 @@ with st.container(border=True):
     st.subheader("Pattern Engine Savings")
 
     async def _fetch_pattern_stats():
-        async with db._connect() as conn:
+        async with db._read() as conn:
             cur = await conn.execute(
                 "SELECT COUNT(*) FROM enrichment_results WHERE from_cache = 1"
             )
@@ -222,7 +222,7 @@ with st.container(border=True):
     if pattern_count > 0:
         st.markdown("**Top Email Patterns by Domain Coverage**")
         async def _fetch_top_patterns():
-            async with db._connect() as conn:
+            async with db._read() as conn:
                 cur = await conn.execute(
                     "SELECT pattern, COUNT(*) as domain_count, AVG(confidence) as avg_conf, "
                     "SUM(sample_count) as total_samples "

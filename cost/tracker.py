@@ -33,7 +33,7 @@ class CostTracker:
         """Returns hit_rate, avg_cost_per_hit, total_credits, total_lookups, marginal_finds."""
         cutoff = (date.today() - timedelta(days=days)).isoformat()
 
-        async with self.db._connect() as conn:
+        async with self.db._read() as conn:
             # Basic stats: total lookups, found count, total credits
             cursor = await conn.execute("""
                 SELECT COUNT(*) as total_lookups,
@@ -139,7 +139,7 @@ class CostTracker:
             provider_efficiency.append((provider, efficiency, pstats))
 
         # Current order: as they appear in DB (by average waterfall_position)
-        async with self.db._connect() as conn:
+        async with self.db._read() as conn:
             cursor = await conn.execute("""
                 SELECT source_provider, AVG(waterfall_position) as avg_pos
                 FROM enrichment_results
@@ -244,7 +244,7 @@ class CostTracker:
         """Returns daily spend data for charts. List of {date, provider, credits, cost}."""
         cutoff = (date.today() - timedelta(days=days)).isoformat()
 
-        async with self.db._connect() as conn:
+        async with self.db._read() as conn:
             cursor = await conn.execute("""
                 SELECT date, provider, credits_used,
                        api_calls_made, successful_lookups, failed_lookups
