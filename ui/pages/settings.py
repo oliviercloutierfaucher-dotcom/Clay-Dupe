@@ -12,6 +12,7 @@ from ui.validation import _get_provider_classes
 
 from data.sync import run_sync
 from ui.shared import get_database, get_settings, get_key_validation_status
+from ui.styles import page_header
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -40,7 +41,7 @@ def _mask_key(key: str) -> str:
 # Page
 # ---------------------------------------------------------------------------
 
-st.header("Settings")
+page_header("Settings", "Provider configuration, waterfall order, and cache")
 
 db = get_database()
 settings = get_settings()

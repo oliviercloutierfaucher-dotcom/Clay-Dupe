@@ -8,7 +8,7 @@ from config.settings import ProviderName
 from cost.budget import BudgetManager
 from data.models import CampaignStatus
 from data.sync import run_sync
-from ui.styles import section_header
+from ui.styles import section_header, page_header, empty_state
 
 
 # ---------------------------------------------------------------------------
@@ -34,7 +34,7 @@ def _status_color(status: str) -> str:
 # Page
 # ---------------------------------------------------------------------------
 
-st.header("Overview")
+page_header("Overview", "Enrichment platform dashboard")
 
 # Retrieve singletons
 from ui.shared import get_database, get_settings, get_key_validation_status  # noqa: E402
@@ -59,10 +59,7 @@ with st.container(border=True):
                 any_invalid = True
     if any_invalid:
         invalid_names = [k for k, v in key_status.items() if not v]
-        st.warning(
-            f"Enrichment may be limited -- invalid API keys detected: "
-            f"{', '.join(invalid_names)}"
-        )
+        st.caption(f":orange[Some providers need configuration: {', '.join(invalid_names)}. Go to Settings.]")
 
 # ---- Top-level metric cards ------------------------------------------------
 
@@ -117,7 +114,7 @@ section_header("Recent Campaigns", "navy")
 campaigns = run_sync(db.get_recent_campaigns(limit=10))
 
 if not campaigns:
-    st.info("No campaigns yet. Head to the **Enrich** page to create one.")
+    empty_state("No campaigns yet. Head to the Enrich page to create one.", "rocket_launch")
 else:
     campaign_rows = []
     for c in campaigns:

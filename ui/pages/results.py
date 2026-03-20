@@ -11,6 +11,7 @@ from data.models import EnrichmentResult, VerificationStatus
 
 from data.sync import run_sync
 from ui.shared import get_database, get_settings
+from ui.styles import page_header, empty_state
 
 # ---------------------------------------------------------------------------
 # Page
@@ -20,7 +21,7 @@ db = get_database()
 
 # ---- Header ---------------------------------------------------------------
 
-st.header("Data Table")
+page_header("Data Table", "Browse and export enrichment results")
 
 # ---- Inline filter bar ----------------------------------------------------
 
@@ -94,7 +95,7 @@ if confidence_threshold > 0:
     ]
 
 if not results:
-    st.info("No results match the current filters. Adjust the filters above or run an enrichment first.")
+    empty_state("No results match the current filters. Adjust filters above or run an enrichment.", "filter_alt_off")
     st.stop()
 
 # ---- Compact pagination -----------------------------------------------------
@@ -115,7 +116,7 @@ with page_cols[0]:
 with page_cols[1]:
     st.caption(
         f"<div style='text-align:center'>"
-        f"**{len(results):,}** results &mdash; Page {st.session_state['results_page']} of {total_pages}"
+        f"**{len(results):,}** results | Page {st.session_state['results_page']} of {total_pages}"
         f"</div>",
         unsafe_allow_html=True,
     )

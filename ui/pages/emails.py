@@ -30,6 +30,7 @@ from data.models import (
 )
 from data.sync import run_sync
 from ui.shared import get_database, get_settings
+from ui.styles import page_header, empty_state
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +138,7 @@ def _build_export_df(
 # Page
 # ---------------------------------------------------------------------------
 
-st.header("Email Generation")
+page_header("Emails", "Generate and manage outreach emails")
 
 db = get_database()
 settings = get_settings()
@@ -154,10 +155,7 @@ campaigns = run_sync(db.get_recent_campaigns(limit=50))
 completed_campaigns = [c for c in campaigns if c.status == CampaignStatus.COMPLETED]
 
 if not completed_campaigns:
-    st.info(
-        "No completed campaigns found. Run an enrichment first, then come back "
-        "to generate emails for the enriched contacts."
-    )
+    empty_state("No completed campaigns found. Run an enrichment first, then come back to generate emails.", "mail")
     st.stop()
 
 campaign_options = {f"{c.name} ({c.created_at:%Y-%m-%d})": c.id for c in completed_campaigns}
@@ -243,10 +241,7 @@ if not api_key:
     api_key = os.getenv("ANTHROPIC_API_KEY", "")
 
 if not api_key:
-    st.warning(
-        "**ANTHROPIC_API_KEY not configured.** Add it to your `.env` file or "
-        "Settings page to enable email generation."
-    )
+    st.caption(":orange[ANTHROPIC_API_KEY not configured. Add it to Settings to enable email generation.]")
 
 # ---------------------------------------------------------------------------
 # Generation Section
@@ -394,7 +389,7 @@ filter_status = None if status_filter == "All" else status_filter.lower()
 emails = run_sync(db.get_generated_emails(selected_campaign_id, status=filter_status))
 
 if not emails:
-    st.info("No emails generated yet. Use the Generate buttons above to create emails.")
+    empty_state("No emails generated yet. Use the Generate buttons above.", "auto_awesome")
     st.stop()
 
 # Load person/company data for display

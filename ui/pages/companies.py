@@ -24,6 +24,7 @@ from enrichment.contact_discovery import discover_contact, batch_discover_contac
 from enrichment.icp_scorer import batch_score_companies, score_company
 from providers.apollo import ApolloProvider
 from ui.shared import get_database, get_settings, get_key_validation_status
+from ui.styles import page_header, empty_state
 
 # ---------------------------------------------------------------------------
 # Shared resources
@@ -32,7 +33,7 @@ from ui.shared import get_database, get_settings, get_key_validation_status
 db = get_database()
 settings = get_settings()
 
-st.header("Companies")
+page_header("Companies", "Manage your target company list")
 
 # ---------------------------------------------------------------------------
 # Apollo availability check
@@ -43,11 +44,7 @@ apollo_available = key_status.get("apollo", False)
 apollo_key = settings.providers.get(ProviderName.APOLLO)
 
 if not apollo_available:
-    st.warning(
-        "Apollo API key is not configured or invalid. "
-        "Contact discovery requires a valid Apollo master key. "
-        "Go to Settings to configure it."
-    )
+    st.caption(":orange[Apollo API key not configured. Contact discovery disabled. Configure in Settings.]")
 
 # ---------------------------------------------------------------------------
 # ICP Profile Selector
@@ -419,7 +416,7 @@ if st.session_state.get("show_csv_import"):
 # ---------------------------------------------------------------------------
 
 if not companies:
-    st.info("No companies found. Add companies manually, import CSV, or search Apollo.")
+    empty_state("No companies found. Add companies manually, import CSV, or search Apollo.", "business")
 else:
     # Build table data with contact info
     table_data = []

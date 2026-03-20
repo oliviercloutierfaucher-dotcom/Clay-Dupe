@@ -11,12 +11,13 @@ from cost.tracker import CostTracker
 from data.sync import run_sync
 
 from ui.shared import get_database, get_settings
+from ui.styles import page_header, empty_state
 
 # ---------------------------------------------------------------------------
 # Page
 # ---------------------------------------------------------------------------
 
-st.header("Analytics")
+page_header("Analytics", "Cost tracking, hit rates, and optimization")
 
 db = get_database()
 settings = get_settings()
@@ -88,7 +89,7 @@ with st.container(border=True):
                     delta=f"${row['Cost (USD)']:,.4f}",
                 )
     else:
-        st.info("No provider activity in the selected date range.")
+        empty_state("No provider activity in the selected date range.", "bar_chart")
 
 # ===== Section 2: Hit Rate Line Chart ========================================
 
@@ -127,7 +128,7 @@ with st.container(border=True):
             },
         )
     else:
-        st.info("No hit rate data available for the selected period.")
+        empty_state("No hit rate data available for the selected period.", "trending_up")
 
 # ===== Section 3: Daily Spend Trend ==========================================
 
@@ -162,7 +163,7 @@ with st.container(border=True):
         st.line_chart(pivot_cost)
         st.caption("Daily estimated USD cost per provider over time")
     else:
-        st.info("No daily spend data available for the selected period.")
+        empty_state("No daily spend data available for the selected period.", "timeline")
 
 # ===== Section 4: Pattern Engine Savings =====================================
 

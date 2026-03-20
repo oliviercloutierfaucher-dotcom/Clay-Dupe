@@ -30,6 +30,7 @@ from data.models import (
 
 from data.sync import run_sync
 from ui.shared import get_database, get_settings, get_key_validation_status
+from ui.styles import page_header, empty_state
 
 logger = logging.getLogger(__name__)
 
@@ -183,16 +184,13 @@ def _run_enrichment_bg(campaign_id: str, db_path: str, settings, force_enrich_do
 # Page
 # ---------------------------------------------------------------------------
 
-st.header("Enrich")
+page_header("Enrich", "Upload data and run waterfall enrichment")
 
 # Warn if no valid providers exist
 _enrich_key_status = get_key_validation_status()
 _valid_providers = [k for k, v in _enrich_key_status.items() if v]
 if not _valid_providers:
-    st.error(
-        "**No valid API keys detected.** Enrichment cannot run without at least one "
-        "valid provider. Go to Settings to configure and validate your API keys."
-    )
+    st.caption(":orange[No valid API keys detected. Configure providers in Settings before running enrichment.]")
 
 db = get_database()
 settings = get_settings()
@@ -353,7 +351,7 @@ if uploaded is not None:
 
 df: pd.DataFrame | None = st.session_state.get("enrich_df")
 if df is None:
-    st.info("Upload a file to get started.")
+    empty_state("Upload a CSV or Excel file to get started.", "upload_file")
     st.stop()
 
 mapper: ColumnMapper = st.session_state.get("enrich_mapper")

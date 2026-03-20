@@ -13,6 +13,7 @@ from providers.apollo import ApolloProvider
 
 from data.sync import run_sync
 from ui.shared import get_database, get_settings
+from ui.styles import page_header, empty_state
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -46,7 +47,7 @@ EMPLOYEE_RANGES = [
 # Page
 # ---------------------------------------------------------------------------
 
-st.header("Find Leads")
+page_header("Find Leads", "Search Apollo for companies and people")
 
 # ---- Search Filters expander -----------------------------------------------
 
@@ -130,7 +131,8 @@ def _build_emp_ranges(min_val: int, max_val: int) -> list[str]:
 if search_btn:
     apollo = _get_apollo()
     if apollo is None:
-        st.error("Apollo API key is not configured. Go to **Settings** to add it.")
+        st.caption(":orange[Apollo API key not configured. Go to Settings.]")
+        st.stop()
     else:
         emp_ranges = _build_emp_ranges(emp_range[0], emp_range[1])
         keywords = [k.strip() for k in keywords_input.split(",") if k.strip()]
@@ -149,7 +151,7 @@ if search_btn:
                 if search_type == "Companies":
                     results = _run_async(apollo.search_companies(**filters))
                     if not results:
-                        st.warning("No companies found matching the filters.")
+                        empty_state("No companies found matching the filters.", "search_off")
                     else:
                         rows = []
                         for c in results:
@@ -170,7 +172,7 @@ if search_btn:
                 else:
                     results = _run_async(apollo.search_people(**filters))
                     if not results:
-                        st.warning("No people found matching the filters.")
+                        empty_state("No people found matching the filters.", "person_off")
                     else:
                         rows = []
                         for p in results:
