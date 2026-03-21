@@ -1,7 +1,8 @@
-"""Email verification pipeline using DNS and SMTP probing."""
+"""Email verification pipeline using Reoon API (preferred) or DNS/SMTP fallback."""
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 import smtplib
 import string
@@ -9,6 +10,9 @@ import time
 from typing import Optional
 
 import dns.resolver
+import httpx
+
+logger = logging.getLogger(__name__)
 
 
 class SMTPRateLimiter:
@@ -25,10 +29,8 @@ class SMTPRateLimiter:
         """Wait until we can probe this domain without getting blacklisted."""
         async with self._lock:
             now = time.monotonic()
-            # Global rate limit
             min_global_wait = (1.0 / self.global_per_second)
             global_wait = max(0, min_global_wait - (now - self._global_last_probe))
-            # Per-domain rate limit
             domain_wait = 0.0
             if domain in self._domain_last_probe:
                 domain_wait = max(0, self.per_domain_interval - (now - self._domain_last_probe[domain]))
@@ -41,16 +43,85 @@ class SMTPRateLimiter:
 
 
 class EmailVerifier:
-    """4-stage email verification: syntax -> MX -> catch-all -> SMTP."""
+    """Email verification with Reoon API (preferred) or local SMTP fallback.
 
-    # Canonical regex from providers.validators
+    If a Reoon API key is provided, verification uses their API for
+    accurate results without risking IP blacklisting. Otherwise falls
+    back to the 4-stage local pipeline: syntax -> MX -> catch-all -> SMTP.
+    """
+
     from providers.validators import _EMAIL_RE
     EMAIL_REGEX = _EMAIL_RE
 
-    def __init__(self, sender_domain: str = "verify.example.com"):
+    REOON_API_URL = "https://emailverifier.reoon.com/api/v1/verify"
+
+    # Map Reoon status to our internal format
+    _REOON_STATUS_MAP = {
+        "valid": {"valid": True, "smtp_result": "valid", "confidence_modifier": 20},
+        "invalid": {"valid": False, "smtp_result": "invalid", "confidence_modifier": -40},
+        "disposable": {"valid": False, "smtp_result": "disposable", "confidence_modifier": -50},
+        "accept_all": {"valid": True, "smtp_result": "catch_all", "confidence_modifier": -15, "catch_all": True},
+        "unknown": {"valid": False, "smtp_result": "unknown", "confidence_modifier": 0},
+        "spamtrap": {"valid": False, "smtp_result": "spamtrap", "confidence_modifier": -50},
+    }
+
+    def __init__(self, sender_domain: str = "verify.example.com", reoon_api_key: str = ""):
         self.sender_domain = sender_domain
+        self.reoon_api_key = reoon_api_key
         self._catch_all_cache: dict[str, Optional[bool]] = {}
         self._rate_limiter = SMTPRateLimiter()
+
+    # ------------------------------------------------------------------
+    # Reoon API verification (preferred path)
+    # ------------------------------------------------------------------
+
+    async def _verify_reoon(self, email: str) -> dict:
+        """Verify email via Reoon API. Returns standard result dict."""
+        result = {
+            "email": email,
+            "valid": False,
+            "catch_all": False,
+            "mx_found": True,
+            "smtp_result": "unknown",
+            "confidence_modifier": 0,
+            "verification_source": "reoon",
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(
+                    self.REOON_API_URL,
+                    params={
+                        "email": email,
+                        "key": self.reoon_api_key,
+                        "mode": "quick",
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+
+            status = data.get("status", "unknown").lower()
+            mapped = self._REOON_STATUS_MAP.get(status, self._REOON_STATUS_MAP["unknown"])
+
+            result["valid"] = mapped["valid"]
+            result["smtp_result"] = mapped["smtp_result"]
+            result["confidence_modifier"] = mapped["confidence_modifier"]
+            result["catch_all"] = mapped.get("catch_all", False)
+            result["mx_found"] = data.get("mx_found", True)
+            result["reoon_raw"] = data
+
+        except httpx.HTTPStatusError as exc:
+            logger.warning("Reoon API error for %s: HTTP %d", email, exc.response.status_code)
+            result["smtp_result"] = "api_error"
+        except (httpx.RequestError, Exception) as exc:
+            logger.warning("Reoon API request failed for %s: %s", email, exc)
+            result["smtp_result"] = "api_error"
+
+        return result
+
+    # ------------------------------------------------------------------
+    # Local SMTP fallback (used when no Reoon key)
+    # ------------------------------------------------------------------
 
     def check_syntax(self, email: str) -> bool:
         """Stage 1: RFC 5322 regex check. Instant, free."""
@@ -70,8 +141,7 @@ class EmailVerifier:
             return []
 
     async def detect_catch_all(self, domain: str) -> Optional[bool]:
-        """Stage 3: Probe with random fake address to detect catch-all.
-        True = catch-all, False = not catch-all, None = inconclusive."""
+        """Stage 3: Probe with random fake address to detect catch-all."""
         if domain in self._catch_all_cache:
             return self._catch_all_cache[domain]
 
@@ -80,7 +150,6 @@ class EmailVerifier:
             self._catch_all_cache[domain] = None
             return None
 
-        # Generate random fake email
         fake_local = ''.join(random.choices(string.ascii_lowercase + string.digits, k=20))
         fake_email = f"{fake_local}@{domain}"
 
@@ -101,7 +170,6 @@ class EmailVerifier:
         if not mx_hosts:
             return "unknown"
 
-        # Check catch-all first
         catch_all = await self.detect_catch_all(domain)
         if catch_all:
             return "catch_all"
@@ -131,8 +199,8 @@ class EmailVerifier:
         except (smtplib.SMTPException, OSError, TimeoutError):
             return "error"
 
-    async def verify(self, email: str) -> dict:
-        """Full 4-stage pipeline. Short-circuits on definitive result."""
+    async def _verify_local(self, email: str) -> dict:
+        """Full 4-stage local pipeline. Short-circuits on definitive result."""
         result = {
             "email": email,
             "valid": False,
@@ -140,9 +208,9 @@ class EmailVerifier:
             "mx_found": False,
             "smtp_result": "unknown",
             "confidence_modifier": 0,
+            "verification_source": "local_smtp",
         }
 
-        # Stage 1: Syntax
         if not self.check_syntax(email):
             result["smtp_result"] = "invalid_syntax"
             result["confidence_modifier"] = -50
@@ -150,7 +218,6 @@ class EmailVerifier:
 
         domain = email.split('@')[1]
 
-        # Stage 2: MX check
         mx_hosts = self.check_mx(domain)
         if not mx_hosts:
             result["smtp_result"] = "no_mx"
@@ -158,16 +225,14 @@ class EmailVerifier:
             return result
         result["mx_found"] = True
 
-        # Stage 3: Catch-all detection
         catch_all = await self.detect_catch_all(domain)
         if catch_all:
             result["catch_all"] = True
             result["smtp_result"] = "catch_all"
-            result["valid"] = True  # Probably valid but can't be sure
+            result["valid"] = True
             result["confidence_modifier"] = -15
             return result
 
-        # Stage 4: SMTP verification (rate-limited)
         await self._rate_limiter.wait_for_slot(domain)
         smtp_result = self._smtp_probe(email, mx_hosts[0])
         if smtp_result == "accepted":
@@ -182,3 +247,35 @@ class EmailVerifier:
             result["confidence_modifier"] = 0
 
         return result
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    async def verify(self, email: str) -> dict:
+        """Verify an email address. Uses Reoon API if configured, else local SMTP.
+
+        Always does a syntax check first (free, instant). Then routes to
+        the appropriate backend.
+        """
+        # Quick syntax check before calling any API
+        if not self.check_syntax(email):
+            return {
+                "email": email,
+                "valid": False,
+                "catch_all": False,
+                "mx_found": False,
+                "smtp_result": "invalid_syntax",
+                "confidence_modifier": -50,
+                "verification_source": "syntax_check",
+            }
+
+        if self.reoon_api_key:
+            result = await self._verify_reoon(email)
+            # If Reoon API fails, fall back to local
+            if result.get("smtp_result") == "api_error":
+                logger.info("Reoon failed for %s, falling back to local SMTP", email)
+                return await self._verify_local(email)
+            return result
+
+        return await self._verify_local(email)

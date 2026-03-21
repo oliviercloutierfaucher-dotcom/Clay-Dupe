@@ -331,6 +331,41 @@ with cache_cols[2]:
 
 st.divider()
 
+# ---- Email Verification (Reoon) ---------------------------------------------
+
+st.subheader("Email Verification (Reoon)")
+st.caption(
+    "Reoon verifies emails via SMTP before they enter your pipeline. "
+    "Without it, the app falls back to local SMTP probing (slower, less accurate)."
+)
+
+with st.container(border=True):
+    reoon_cols = st.columns([3, 1])
+    with reoon_cols[0]:
+        reoon_current = settings.reoon_api_key
+        reoon_masked = ("*" * (len(reoon_current) - 4) + reoon_current[-4:]) if len(reoon_current) > 4 else ""
+        new_reoon_key = st.text_input(
+            "Reoon API Key",
+            value="",
+            type="password",
+            placeholder=reoon_masked or "Enter Reoon API key...",
+            key="reoon_api_key_input",
+        )
+        if new_reoon_key:
+            settings.reoon_api_key = new_reoon_key
+            st.caption(":green[Key updated (in memory only)]")
+        elif reoon_current:
+            st.caption(f"Current: {reoon_masked}")
+    with reoon_cols[1]:
+        if reoon_current or new_reoon_key:
+            st.markdown("")
+            st.markdown(":green[Configured]")
+        else:
+            st.markdown("")
+            st.markdown(":orange[Not configured]")
+
+st.divider()
+
 # ---- General Settings -------------------------------------------------------
 
 st.subheader("General Settings")
@@ -519,6 +554,10 @@ if st.button("Save All Settings", type="primary", icon=":material/save:", use_co
     # Anthropic API key
     if settings.anthropic_api_key:
         updates["ANTHROPIC_API_KEY"] = settings.anthropic_api_key
+
+    # Reoon API key
+    if settings.reoon_api_key:
+        updates["REOON_API_KEY"] = settings.reoon_api_key
 
     persist_settings(updates)
     settings.reload_api_keys()

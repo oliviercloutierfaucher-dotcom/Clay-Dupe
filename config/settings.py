@@ -52,6 +52,7 @@ class Settings(BaseModel):
     max_concurrent_requests: int = 5
     icp_presets: dict[str, ICPPreset]
     anthropic_api_key: str = ""
+    reoon_api_key: str = ""
 
     def get_enabled_providers(self) -> list[ProviderName]:
         """Return providers that are enabled AND have API keys configured."""
@@ -104,6 +105,7 @@ def load_settings() -> Settings:
     db_path = os.getenv("DB_PATH", "clay_dupe.db")
 
     anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    reoon_api_key = os.getenv("REOON_API_KEY", "")
 
     return Settings(
         providers=providers,
@@ -112,6 +114,7 @@ def load_settings() -> Settings:
         db_path=db_path,
         icp_presets=ICP_PRESETS,
         anthropic_api_key=anthropic_api_key,
+        reoon_api_key=reoon_api_key,
     )
 
 def persist_settings(updates: dict[str, str | None]) -> None:

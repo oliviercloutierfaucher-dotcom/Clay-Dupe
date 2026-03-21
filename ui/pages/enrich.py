@@ -101,7 +101,7 @@ def _run_enrichment_bg(campaign_id: str, db_path: str, settings, force_enrich_do
 
         budget = BudgetManager(bg_db)
         cost_tracker = _CostTracker(bg_db)
-        verifier = EmailVerifier()
+        verifier = EmailVerifier(reoon_api_key=settings.reoon_api_key)
         pattern_engine = PatternEngine(bg_db, verifier)
         circuit_breakers = create_circuit_breakers()
         rate_limiters = create_rate_limiters()
