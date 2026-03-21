@@ -428,10 +428,10 @@ class ApolloProvider(BaseProvider):
     # ------------------------------------------------------------------
 
     async def health_check(self) -> bool:
-        """Check API health via GET /rate_limits."""
+        """Check API health via GET /auth/health."""
         try:
-            await self._get("/rate_limits")
-            return True
+            data, _ = await self._get("/auth/health")
+            return data.get("is_logged_in", False)
         except httpx.HTTPStatusError as exc:
             logger.warning(
                 "Apollo health check failed: HTTP %d", exc.response.status_code,
